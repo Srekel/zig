@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const builtin = @import("builtin");
 const std = @import("../std.zig");
 const debug = std.debug;
@@ -128,11 +133,13 @@ test "join" {
     testJoinPosix(&[_][]const u8{ "a/", "/c" }, "a/c");
 }
 
-pub fn isAbsoluteC(path_c: [*:0]const u8) bool {
+pub const isAbsoluteC = @compileError("deprecated: renamed to isAbsoluteZ");
+
+pub fn isAbsoluteZ(path_c: [*:0]const u8) bool {
     if (builtin.os.tag == .windows) {
-        return isAbsoluteWindowsC(path_c);
+        return isAbsoluteWindowsZ(path_c);
     } else {
-        return isAbsolutePosixC(path_c);
+        return isAbsolutePosixZ(path_c);
     }
 }
 
@@ -172,19 +179,27 @@ pub fn isAbsoluteWindows(path: []const u8) bool {
 }
 
 pub fn isAbsoluteWindowsW(path_w: [*:0]const u16) bool {
-    return isAbsoluteWindowsImpl(u16, mem.toSliceConst(u16, path_w));
+    return isAbsoluteWindowsImpl(u16, mem.spanZ(path_w));
 }
 
-pub fn isAbsoluteWindowsC(path_c: [*:0]const u8) bool {
-    return isAbsoluteWindowsImpl(u8, mem.toSliceConst(u8, path_c));
+pub fn isAbsoluteWindowsWTF16(path: []const u16) bool {
+    return isAbsoluteWindowsImpl(u16, path);
+}
+
+pub const isAbsoluteWindowsC = @compileError("deprecated: renamed to isAbsoluteWindowsZ");
+
+pub fn isAbsoluteWindowsZ(path_c: [*:0]const u8) bool {
+    return isAbsoluteWindowsImpl(u8, mem.spanZ(path_c));
 }
 
 pub fn isAbsolutePosix(path: []const u8) bool {
     return path.len > 0 and path[0] == sep_posix;
 }
 
-pub fn isAbsolutePosixC(path_c: [*:0]const u8) bool {
-    return isAbsolutePosix(mem.toSliceConst(u8, path_c));
+pub const isAbsolutePosixC = @compileError("deprecated: renamed to isAbsolutePosixZ");
+
+pub fn isAbsolutePosixZ(path_c: [*:0]const u8) bool {
+    return isAbsolutePosix(mem.spanZ(path_c));
 }
 
 test "isAbsoluteWindows" {
@@ -643,6 +658,8 @@ pub fn resolvePosix(allocator: *Allocator, paths: []const []const u8) ![]u8 {
 }
 
 test "resolve" {
+    if (builtin.os.tag == .wasi) return error.SkipZigTest;
+
     const cwd = try process.getCwdAlloc(testing.allocator);
     defer testing.allocator.free(cwd);
     if (builtin.os.tag == .windows) {
@@ -657,10 +674,11 @@ test "resolve" {
 }
 
 test "resolveWindows" {
-    if (@import("builtin").arch == .aarch64) {
+    if (builtin.arch == .aarch64) {
         // TODO https://github.com/ziglang/zig/issues/3288
         return error.SkipZigTest;
     }
+    if (builtin.os.tag == .wasi) return error.SkipZigTest;
     if (builtin.os.tag == .windows) {
         const cwd = try process.getCwdAlloc(testing.allocator);
         defer testing.allocator.free(cwd);
@@ -705,6 +723,8 @@ test "resolveWindows" {
 }
 
 test "resolvePosix" {
+    if (builtin.os.tag == .wasi) return error.SkipZigTest;
+
     try testResolvePosix(&[_][]const u8{ "/a/b", "c" }, "/a/b/c");
     try testResolvePosix(&[_][]const u8{ "/a/b", "c", "//d", "e///" }, "/d/e");
     try testResolvePosix(&[_][]const u8{ "/a/b/c", "..", "../" }, "/a");
@@ -729,8 +749,12 @@ fn testResolvePosix(paths: []const []const u8, expected: []const u8) !void {
     return testing.expect(mem.eql(u8, actual, expected));
 }
 
+/// Strip the last component from a file path.
+///
 /// If the path is a file in the current directory (no directory component)
-/// then returns null
+/// then returns null.
+///
+/// If the path is the root directory, returns null.
 pub fn dirname(path: []const u8) ?[]const u8 {
     if (builtin.os.tag == .windows) {
         return dirnameWindows(path);
@@ -745,19 +769,19 @@ pub fn dirnameWindows(path: []const u8) ?[]const u8 {
 
     const root_slice = diskDesignatorWindows(path);
     if (path.len == root_slice.len)
-        return path;
+        return null;
 
     const have_root_slash = path.len > root_slice.len and (path[root_slice.len] == '/' or path[root_slice.len] == '\\');
 
     var end_index: usize = path.len - 1;
 
-    while ((path[end_index] == '/' or path[end_index] == '\\') and end_index > root_slice.len) {
+    while (path[end_index] == '/' or path[end_index] == '\\') {
         if (end_index == 0)
             return null;
         end_index -= 1;
     }
 
-    while (path[end_index] != '/' and path[end_index] != '\\' and end_index > root_slice.len) {
+    while (path[end_index] != '/' and path[end_index] != '\\') {
         if (end_index == 0)
             return null;
         end_index -= 1;
@@ -780,7 +804,7 @@ pub fn dirnamePosix(path: []const u8) ?[]const u8 {
     var end_index: usize = path.len - 1;
     while (path[end_index] == '/') {
         if (end_index == 0)
-            return path[0..1];
+            return null;
         end_index -= 1;
     }
 
@@ -790,7 +814,7 @@ pub fn dirnamePosix(path: []const u8) ?[]const u8 {
         end_index -= 1;
     }
 
-    if (end_index == 0 and path[end_index] == '/')
+    if (end_index == 0 and path[0] == '/')
         return path[0..1];
 
     if (end_index == 0)
@@ -803,8 +827,10 @@ test "dirnamePosix" {
     testDirnamePosix("/a/b/c", "/a/b");
     testDirnamePosix("/a/b/c///", "/a/b");
     testDirnamePosix("/a", "/");
-    testDirnamePosix("/", "/");
-    testDirnamePosix("////", "/");
+    testDirnamePosix("/", null);
+    testDirnamePosix("//", null);
+    testDirnamePosix("///", null);
+    testDirnamePosix("////", null);
     testDirnamePosix("", null);
     testDirnamePosix("a", null);
     testDirnamePosix("a/", null);
@@ -812,27 +838,27 @@ test "dirnamePosix" {
 }
 
 test "dirnameWindows" {
-    testDirnameWindows("c:\\", "c:\\");
+    testDirnameWindows("c:\\", null);
     testDirnameWindows("c:\\foo", "c:\\");
     testDirnameWindows("c:\\foo\\", "c:\\");
     testDirnameWindows("c:\\foo\\bar", "c:\\foo");
     testDirnameWindows("c:\\foo\\bar\\", "c:\\foo");
     testDirnameWindows("c:\\foo\\bar\\baz", "c:\\foo\\bar");
-    testDirnameWindows("\\", "\\");
+    testDirnameWindows("\\", null);
     testDirnameWindows("\\foo", "\\");
     testDirnameWindows("\\foo\\", "\\");
     testDirnameWindows("\\foo\\bar", "\\foo");
     testDirnameWindows("\\foo\\bar\\", "\\foo");
     testDirnameWindows("\\foo\\bar\\baz", "\\foo\\bar");
-    testDirnameWindows("c:", "c:");
-    testDirnameWindows("c:foo", "c:");
-    testDirnameWindows("c:foo\\", "c:");
+    testDirnameWindows("c:", null);
+    testDirnameWindows("c:foo", null);
+    testDirnameWindows("c:foo\\", null);
     testDirnameWindows("c:foo\\bar", "c:foo");
     testDirnameWindows("c:foo\\bar\\", "c:foo");
     testDirnameWindows("c:foo\\bar\\baz", "c:foo\\bar");
     testDirnameWindows("file:stream", null);
     testDirnameWindows("dir\\file:stream", "dir");
-    testDirnameWindows("\\\\unc\\share", "\\\\unc\\share");
+    testDirnameWindows("\\\\unc\\share", null);
     testDirnameWindows("\\\\unc\\share\\foo", "\\\\unc\\share\\");
     testDirnameWindows("\\\\unc\\share\\foo\\", "\\\\unc\\share\\");
     testDirnameWindows("\\\\unc\\share\\foo\\bar", "\\\\unc\\share\\foo");
@@ -842,8 +868,8 @@ test "dirnameWindows" {
     testDirnameWindows("/a/b", "/a");
     testDirnameWindows("/a", "/");
     testDirnameWindows("", null);
-    testDirnameWindows("/", "/");
-    testDirnameWindows("////", "/");
+    testDirnameWindows("/", null);
+    testDirnameWindows("////", null);
     testDirnameWindows("foo", null);
 }
 
@@ -1019,7 +1045,7 @@ pub fn relativeWindows(allocator: *Allocator, from: []const u8, to: []const u8) 
     var from_it = mem.tokenize(resolved_from, "/\\");
     var to_it = mem.tokenize(resolved_to, "/\\");
     while (true) {
-        const from_component = from_it.next() orelse return mem.dupe(allocator, u8, to_it.rest());
+        const from_component = from_it.next() orelse return allocator.dupe(u8, to_it.rest());
         const to_rest = to_it.rest();
         if (to_it.next()) |to_component| {
             // TODO ASCII is wrong, we actually need full unicode support to compare paths.
@@ -1070,7 +1096,7 @@ pub fn relativePosix(allocator: *Allocator, from: []const u8, to: []const u8) ![
     var from_it = mem.tokenize(resolved_from, "/");
     var to_it = mem.tokenize(resolved_to, "/");
     while (true) {
-        const from_component = from_it.next() orelse return mem.dupe(allocator, u8, to_it.rest());
+        const from_component = from_it.next() orelse return allocator.dupe(u8, to_it.rest());
         const to_rest = to_it.rest();
         if (to_it.next()) |to_component| {
             if (mem.eql(u8, from_component, to_component))
@@ -1095,7 +1121,7 @@ pub fn relativePosix(allocator: *Allocator, from: []const u8, to: []const u8) ![
         }
         if (to_rest.len == 0) {
             // shave off the trailing slash
-            return result[0 .. result_index - 1];
+            return allocator.shrink(result, result_index - 1);
         }
 
         mem.copy(u8, result[result_index..], to_rest);
@@ -1106,10 +1132,12 @@ pub fn relativePosix(allocator: *Allocator, from: []const u8, to: []const u8) ![
 }
 
 test "relative" {
-    if (@import("builtin").arch == .aarch64) {
+    if (builtin.arch == .aarch64) {
         // TODO https://github.com/ziglang/zig/issues/3288
         return error.SkipZigTest;
     }
+    if (builtin.os.tag == .wasi) return error.SkipZigTest;
+
     try testRelativeWindows("c:/blah\\blah", "d:/games", "D:\\games");
     try testRelativeWindows("c:/aaaa/bbbb", "c:/aaaa", "..");
     try testRelativeWindows("c:/aaaa/bbbb", "c:/cccc", "..\\..\\cccc");

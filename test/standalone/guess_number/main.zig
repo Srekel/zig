@@ -4,7 +4,7 @@ const io = std.io;
 const fmt = std.fmt;
 
 pub fn main() !void {
-    const stdout = io.getStdOut().outStream();
+    const stdout = io.getStdOut().writer();
     const stdin = io.getStdIn();
 
     try stdout.print("Welcome to the Guess Number Game in Zig.\n", .{});
@@ -17,7 +17,7 @@ pub fn main() !void {
     const seed = std.mem.readIntNative(u64, &seed_bytes);
     var prng = std.rand.DefaultPrng.init(seed);
 
-    const answer = prng.random.range(u8, 0, 100) + 1;
+    const answer = prng.random.intRangeLessThan(u8, 0, 100) + 1;
 
     while (true) {
         try stdout.print("\nGuess a number between 1 and 100: ", .{});

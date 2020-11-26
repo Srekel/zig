@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("../std.zig");
 const builtin = @import("builtin");
 const assert = std.debug.assert;
@@ -89,11 +94,13 @@ pub fn Channel(comptime T: type) type {
         /// buffer, or in the case of a zero size buffer, when the item has been retrieved by a getter.
         /// Or when the channel is destroyed.
         pub fn put(self: *SelfChannel, data: T) void {
-            var my_tick_node = Loop.NextTickNode.init(@frame());
-            var queue_node = std.atomic.Queue(PutNode).Node.init(PutNode{
-                .tick_node = &my_tick_node,
-                .data = data,
-            });
+            var my_tick_node = Loop.NextTickNode{ .data = @frame() };
+            var queue_node = std.atomic.Queue(PutNode).Node{
+                .data = PutNode{
+                    .tick_node = &my_tick_node,
+                    .data = data,
+                },
+            };
 
             suspend {
                 self.putters.put(&queue_node);
@@ -105,16 +112,18 @@ pub fn Channel(comptime T: type) type {
 
         /// await this function to get an item from the channel. If the buffer is empty, the frame will
         /// complete when the next item is put in the channel.
-        pub async fn get(self: *SelfChannel) T {
+        pub fn get(self: *SelfChannel) callconv(.Async) T {
             // TODO https://github.com/ziglang/zig/issues/2765
             var result: T = undefined;
-            var my_tick_node = Loop.NextTickNode.init(@frame());
-            var queue_node = std.atomic.Queue(GetNode).Node.init(GetNode{
-                .tick_node = &my_tick_node,
-                .data = GetNode.Data{
-                    .Normal = GetNode.Normal{ .ptr = &result },
+            var my_tick_node = Loop.NextTickNode{ .data = @frame() };
+            var queue_node = std.atomic.Queue(GetNode).Node{
+                .data = GetNode{
+                    .tick_node = &my_tick_node,
+                    .data = GetNode.Data{
+                        .Normal = GetNode.Normal{ .ptr = &result },
+                    },
                 },
-            });
+            };
 
             suspend {
                 self.getters.put(&queue_node);
@@ -140,17 +149,19 @@ pub fn Channel(comptime T: type) type {
             // TODO integrate this function with named return values
             // so we can get rid of this extra result copy
             var result: ?T = null;
-            var my_tick_node = Loop.NextTickNode.init(@frame());
-            var or_null_node = std.atomic.Queue(*std.atomic.Queue(GetNode).Node).Node.init(undefined);
-            var queue_node = std.atomic.Queue(GetNode).Node.init(GetNode{
-                .tick_node = &my_tick_node,
-                .data = GetNode.Data{
-                    .OrNull = GetNode.OrNull{
-                        .ptr = &result,
-                        .or_null = &or_null_node,
+            var my_tick_node = Loop.NextTickNode{ .data = @frame() };
+            var or_null_node = std.atomic.Queue(*std.atomic.Queue(GetNode).Node).Node{ .data = undefined };
+            var queue_node = std.atomic.Queue(GetNode).Node{
+                .data = GetNode{
+                    .tick_node = &my_tick_node,
+                    .data = GetNode.Data{
+                        .OrNull = GetNode.OrNull{
+                            .ptr = &result,
+                            .or_null = &or_null_node,
+                        },
                     },
                 },
-            });
+            };
             or_null_node.data = &queue_node;
 
             suspend {
@@ -305,8 +316,7 @@ test "std.event.Channel wraparound" {
     channel.put(7);
     testing.expectEqual(@as(i32, 7), channel.get());
 }
-
-async fn testChannelGetter(channel: *Channel(i32)) void {
+fn testChannelGetter(channel: *Channel(i32)) callconv(.Async) void {
     const value1 = channel.get();
     testing.expect(value1 == 1234);
 
@@ -321,12 +331,10 @@ async fn testChannelGetter(channel: *Channel(i32)) void {
     testing.expect(value4.? == 4444);
     await last_put;
 }
-
-async fn testChannelPutter(channel: *Channel(i32)) void {
+fn testChannelPutter(channel: *Channel(i32)) callconv(.Async) void {
     channel.put(1234);
     channel.put(4567);
 }
-
-async fn testPut(channel: *Channel(i32), value: i32) void {
+fn testPut(channel: *Channel(i32), value: i32) callconv(.Async) void {
     channel.put(value);
 }

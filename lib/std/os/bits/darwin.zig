@@ -1,10 +1,19 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("../../std.zig");
 const assert = std.debug.assert;
 const maxInt = std.math.maxInt;
 
+// See: https://opensource.apple.com/source/xnu/xnu-6153.141.1/bsd/sys/_types.h.auto.html
+// TODO: audit mode_t/pid_t, should likely be u16/i32
 pub const fd_t = c_int;
 pub const pid_t = c_int;
 pub const mode_t = c_uint;
+pub const uid_t = u32;
+pub const gid_t = u32;
 
 pub const in_port_t = u16;
 pub const sa_family_t = u8;
@@ -55,19 +64,21 @@ pub const mach_timebase_info_data = extern struct {
 pub const off_t = i64;
 pub const ino_t = u64;
 
-/// Renamed to Stat to not conflict with the stat function.
-/// atime, mtime, and ctime have functions to return `timespec`,
-/// because although this is a POSIX API, the layout and names of
-/// the structs are inconsistent across operating systems, and
-/// in C, macros are used to hide the differences. Here we use
-/// methods to accomplish this.
-pub const Stat = extern struct {
+pub const Flock = extern struct {
+    l_start: off_t,
+    l_len: off_t,
+    l_pid: pid_t,
+    l_type: i16,
+    l_whence: i16,
+};
+
+pub const libc_stat = extern struct {
     dev: i32,
     mode: u16,
     nlink: u16,
     ino: ino_t,
-    uid: u32,
-    gid: u32,
+    uid: uid_t,
+    gid: gid_t,
     rdev: i32,
     atimesec: isize,
     atimensec: isize,
@@ -85,21 +96,21 @@ pub const Stat = extern struct {
     lspare: i32,
     qspare: [2]i64,
 
-    pub fn atime(self: Stat) timespec {
+    pub fn atime(self: @This()) timespec {
         return timespec{
             .tv_sec = self.atimesec,
             .tv_nsec = self.atimensec,
         };
     }
 
-    pub fn mtime(self: Stat) timespec {
+    pub fn mtime(self: @This()) timespec {
         return timespec{
             .tv_sec = self.mtimesec,
             .tv_nsec = self.mtimensec,
         };
     }
 
-    pub fn ctime(self: Stat) timespec {
+    pub fn ctime(self: @This()) timespec {
         return timespec{
             .tv_sec = self.ctimesec,
             .tv_nsec = self.ctimensec,
@@ -117,7 +128,7 @@ pub const empty_sigset = sigset_t(0);
 
 /// Renamed from `sigaction` to `Sigaction` to avoid conflict with function name.
 pub const Sigaction = extern struct {
-    handler: extern fn (c_int) void,
+    handler: fn (c_int) callconv(.C) void,
     sa_mask: sigset_t,
     sa_flags: c_int,
 };
@@ -756,12 +767,43 @@ pub const SOCK_RDM = 4;
 pub const SOCK_SEQPACKET = 5;
 pub const SOCK_MAXADDRLEN = 255;
 
+/// Not actually supported by Darwin, but Zig supplies a shim.
+/// This numerical value is not ABI-stable. It need only not conflict
+/// with any other "SOCK_" bits.
+pub const SOCK_CLOEXEC = 1 << 15;
+/// Not actually supported by Darwin, but Zig supplies a shim.
+/// This numerical value is not ABI-stable. It need only not conflict
+/// with any other "SOCK_" bits.
+pub const SOCK_NONBLOCK = 1 << 16;
+
 pub const IPPROTO_ICMP = 1;
 pub const IPPROTO_ICMPV6 = 58;
 pub const IPPROTO_TCP = 6;
 pub const IPPROTO_UDP = 17;
 pub const IPPROTO_IP = 0;
 pub const IPPROTO_IPV6 = 41;
+
+pub const SOL_SOCKET = 0xffff;
+
+pub const SO_DEBUG = 0x0001;
+pub const SO_ACCEPTCONN = 0x0002;
+pub const SO_REUSEADDR = 0x0004;
+pub const SO_KEEPALIVE = 0x0008;
+pub const SO_DONTROUTE = 0x0010;
+pub const SO_BROADCAST = 0x0020;
+pub const SO_USELOOPBACK = 0x0040;
+pub const SO_LINGER = 0x1080;
+pub const SO_OOBINLINE = 0x0100;
+pub const SO_REUSEPORT = 0x0200;
+pub const SO_ACCEPTFILTER = 0x1000;
+pub const SO_SNDBUF = 0x1001;
+pub const SO_RCVBUF = 0x1002;
+pub const SO_SNDLOWAT = 0x1003;
+pub const SO_RCVLOWAT = 0x1004;
+pub const SO_SNDTIMEO = 0x1005;
+pub const SO_RCVTIMEO = 0x1006;
+pub const SO_ERROR = 0x1007;
+pub const SO_TYPE = 0x1008;
 
 fn wstatus(x: u32) u32 {
     return x & 0o177;
@@ -1224,10 +1266,10 @@ pub const RTLD_NOLOAD = 0x10;
 pub const RTLD_NODELETE = 0x80;
 pub const RTLD_FIRST = 0x100;
 
-pub const RTLD_NEXT = @intToPtr(*c_void, ~maxInt(usize));
-pub const RTLD_DEFAULT = @intToPtr(*c_void, ~maxInt(usize) - 1);
-pub const RTLD_SELF = @intToPtr(*c_void, ~maxInt(usize) - 2);
-pub const RTLD_MAIN_ONLY = @intToPtr(*c_void, ~maxInt(usize) - 4);
+pub const RTLD_NEXT = @intToPtr(*c_void, @bitCast(usize, @as(isize, -1)));
+pub const RTLD_DEFAULT = @intToPtr(*c_void, @bitCast(usize, @as(isize, -2)));
+pub const RTLD_SELF = @intToPtr(*c_void, @bitCast(usize, @as(isize, -3)));
+pub const RTLD_MAIN_ONLY = @intToPtr(*c_void, @bitCast(usize, @as(isize, -5)));
 
 /// duplicate file descriptor
 pub const F_DUPFD = 0;
@@ -1386,3 +1428,98 @@ pub const F_UNLCK = 2;
 
 /// exclusive or write lock
 pub const F_WRLCK = 3;
+
+pub const LOCK_SH = 1;
+pub const LOCK_EX = 2;
+pub const LOCK_UN = 8;
+pub const LOCK_NB = 4;
+
+pub const nfds_t = usize;
+pub const pollfd = extern struct {
+    fd: fd_t,
+    events: i16,
+    revents: i16,
+};
+
+pub const POLLIN = 0x001;
+pub const POLLPRI = 0x002;
+pub const POLLOUT = 0x004;
+pub const POLLRDNORM = 0x040;
+pub const POLLWRNORM = POLLOUT;
+pub const POLLRDBAND = 0x080;
+pub const POLLWRBAND = 0x100;
+
+pub const POLLEXTEND = 0x0200;
+pub const POLLATTRIB = 0x0400;
+pub const POLLNLINK = 0x0800;
+pub const POLLWRITE = 0x1000;
+
+pub const POLLERR = 0x008;
+pub const POLLHUP = 0x010;
+pub const POLLNVAL = 0x020;
+
+pub const POLLSTANDARD = POLLIN | POLLPRI | POLLOUT | POLLRDNORM | POLLRDBAND | POLLWRBAND | POLLERR | POLLHUP | POLLNVAL;
+
+pub const CLOCK_REALTIME = 0;
+pub const CLOCK_MONOTONIC = 6;
+pub const CLOCK_MONOTONIC_RAW = 4;
+pub const CLOCK_MONOTONIC_RAW_APPROX = 5;
+pub const CLOCK_UPTIME_RAW = 8;
+pub const CLOCK_UPTIME_RAW_APPROX = 9;
+pub const CLOCK_PROCESS_CPUTIME_ID = 12;
+pub const CLOCK_THREAD_CPUTIME_ID = 16;
+
+/// Max open files per process
+/// https://opensource.apple.com/source/xnu/xnu-4903.221.2/bsd/sys/syslimits.h.auto.html
+pub const OPEN_MAX = 10240;
+pub const RUSAGE_SELF = 0;
+pub const RUSAGE_CHILDREN = -1;
+
+pub const rusage = extern struct {
+    utime: timeval,
+    stime: timeval,
+    maxrss: isize,
+    ixrss: isize,
+    idrss: isize,
+    isrss: isize,
+    minflt: isize,
+    majflt: isize,
+    nswap: isize,
+    inblock: isize,
+    oublock: isize,
+    msgsnd: isize,
+    msgrcv: isize,
+    nsignals: isize,
+    nvcsw: isize,
+    nivcsw: isize,
+};
+
+pub const rlimit_resource = extern enum(c_int) {
+    CPU = 0,
+    FSIZE = 1,
+    DATA = 2,
+    STACK = 3,
+    CORE = 4,
+    AS = 5,
+    RSS = 5,
+    MEMLOCK = 6,
+    NPROC = 7,
+    NOFILE = 8,
+
+    _,
+};
+
+pub const rlim_t = u64;
+
+/// No limit
+pub const RLIM_INFINITY: rlim_t = (1 << 63) - 1;
+
+pub const RLIM_SAVED_MAX = RLIM_INFINITY;
+pub const RLIM_SAVED_CUR = RLIM_INFINITY;
+
+pub const rlimit = extern struct {
+    /// Soft limit
+    cur: rlim_t,
+    /// Hard limit
+    max: rlim_t,
+};

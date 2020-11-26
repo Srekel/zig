@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("../std.zig");
 const elf = std.elf;
 const mem = std.mem;
@@ -8,8 +13,11 @@ const assert = std.debug.assert;
 const process = std.process;
 const Target = std.Target;
 const CrossTarget = std.zig.CrossTarget;
+const macos = @import("system/macos.zig");
 
 const is_windows = Target.current.os.tag == .windows;
+
+pub const getSDKPath = macos.getSDKPath;
 
 pub const NativePaths = struct {
     include_dirs: ArrayList([:0]u8),
@@ -82,6 +90,7 @@ pub const NativePaths = struct {
 
         if (!is_windows) {
             const triple = try Target.current.linuxTriple(allocator);
+            const qual = Target.current.cpu.arch.ptrBitWidth();
 
             // TODO: $ ld --verbose | grep SEARCH_DIR
             // the output contains some paths that end with lib64, maybe include them too?
@@ -89,17 +98,17 @@ pub const NativePaths = struct {
             // TODO: some of these are suspect and should only be added on some systems. audit needed.
 
             try self.addIncludeDir("/usr/local/include");
+            try self.addLibDirFmt("/usr/local/lib{}", .{qual});
             try self.addLibDir("/usr/local/lib");
-            try self.addLibDir("/usr/local/lib64");
 
             try self.addIncludeDirFmt("/usr/include/{}", .{triple});
             try self.addLibDirFmt("/usr/lib/{}", .{triple});
 
             try self.addIncludeDir("/usr/include");
+            try self.addLibDirFmt("/lib{}", .{qual});
             try self.addLibDir("/lib");
-            try self.addLibDir("/lib64");
+            try self.addLibDirFmt("/usr/lib{}", .{qual});
             try self.addLibDir("/usr/lib");
-            try self.addLibDir("/usr/lib64");
 
             // example: on a 64-bit debian-based linux distro, with zlib installed from apt:
             // zlib.h is in /usr/include (added above)
@@ -119,7 +128,7 @@ pub const NativePaths = struct {
     }
 
     fn deinitArray(array: *ArrayList([:0]u8)) void {
-        for (array.toSlice()) |item| {
+        for (array.items) |item| {
             array.allocator.free(item);
         }
         array.deinit();
@@ -129,7 +138,7 @@ pub const NativePaths = struct {
         return self.appendArray(&self.include_dirs, s);
     }
 
-    pub fn addIncludeDirFmt(self: *NativePaths, comptime fmt: []const u8, args: var) !void {
+    pub fn addIncludeDirFmt(self: *NativePaths, comptime fmt: []const u8, args: anytype) !void {
         const item = try std.fmt.allocPrint0(self.include_dirs.allocator, fmt, args);
         errdefer self.include_dirs.allocator.free(item);
         try self.include_dirs.append(item);
@@ -139,7 +148,7 @@ pub const NativePaths = struct {
         return self.appendArray(&self.lib_dirs, s);
     }
 
-    pub fn addLibDirFmt(self: *NativePaths, comptime fmt: []const u8, args: var) !void {
+    pub fn addLibDirFmt(self: *NativePaths, comptime fmt: []const u8, args: anytype) !void {
         const item = try std.fmt.allocPrint0(self.lib_dirs.allocator, fmt, args);
         errdefer self.lib_dirs.allocator.free(item);
         try self.lib_dirs.append(item);
@@ -149,7 +158,7 @@ pub const NativePaths = struct {
         return self.appendArray(&self.warnings, s);
     }
 
-    pub fn addWarningFmt(self: *NativePaths, comptime fmt: []const u8, args: var) !void {
+    pub fn addWarningFmt(self: *NativePaths, comptime fmt: []const u8, args: anytype) !void {
         const item = try std.fmt.allocPrint0(self.warnings.allocator, fmt, args);
         errdefer self.warnings.allocator.free(item);
         try self.warnings.append(item);
@@ -160,7 +169,7 @@ pub const NativePaths = struct {
     }
 
     fn appendArray(self: *NativePaths, array: *ArrayList([:0]u8), s: []const u8) !void {
-        const item = try std.mem.dupeZ(array.allocator, u8, s);
+        const item = try array.allocator.dupeZ(u8, s);
         errdefer array.allocator.free(item);
         try array.append(item);
     }
@@ -196,20 +205,15 @@ pub const NativeTargetInfo = struct {
     /// deinitialization method.
     /// TODO Remove the Allocator requirement from this function.
     pub fn detect(allocator: *Allocator, cross_target: CrossTarget) DetectError!NativeTargetInfo {
-        var os = Target.Os.defaultVersionRange(cross_target.getOsTag());
+        var os = cross_target.getOsTag().defaultVersionRange();
         if (cross_target.os_tag == null) {
             switch (Target.current.os.tag) {
                 .linux => {
                     const uts = std.os.uname();
-                    const release = mem.toSliceConst(u8, &uts.release);
-                    // The release field may have several other fields after the
-                    // kernel version
-                    const kernel_version = if (mem.indexOfScalar(u8, release, '-')) |pos|
-                        release[0..pos]
-                    else
-                        release;
-
-                    if (std.builtin.Version.parse(kernel_version)) |ver| {
+                    const release = mem.spanZ(&uts.release);
+                    // The release field sometimes has a weird format,
+                    // `Version.parse` will attempt to find some meaningful interpretation. 
+                    if (std.builtin.Version.parse(release)) |ver| {
                         os.version_range.linux.range.min = ver;
                         os.version_range.linux.range.max = ver;
                     } else |err| switch (err) {
@@ -243,7 +247,7 @@ pub const NativeTargetInfo = struct {
                         // values
                         const known_build_numbers = [_]u32{
                             10240, 10586, 14393, 15063, 16299, 17134, 17763,
-                            18362, 18363,
+                            18362, 19041,
                         };
                         var last_idx: usize = 0;
                         for (known_build_numbers) |build, i| {
@@ -258,37 +262,60 @@ pub const NativeTargetInfo = struct {
                     os.version_range.windows.max = @intToEnum(Target.Os.WindowsVersion, version);
                     os.version_range.windows.min = @intToEnum(Target.Os.WindowsVersion, version);
                 },
-                .macosx => {
-                    var product_version: [32]u8 = undefined;
-                    var size: usize = product_version.len;
+                .macos => {
+                    var scbuf: [32]u8 = undefined;
+                    var size: usize = undefined;
 
-                    // The osproductversion sysctl was introduced first with
-                    // High Sierra, thankfully that's also the baseline that Zig
-                    // supports
-                    std.os.sysctlbynameC(
-                        "kern.osproductversion",
-                        &product_version,
-                        &size,
-                        null,
-                        0,
-                    ) catch |err| switch (err) {
-                        error.UnknownName => unreachable,
-                        else => unreachable,
-                    };
-
-                    const string_version = product_version[0 .. size - 1 :0];
-                    if (std.builtin.Version.parse(string_version)) |ver| {
-                        os.version_range.semver.min = ver;
-                        os.version_range.semver.max = ver;
+                    // The osproductversion sysctl was introduced first with 10.13.4 High Sierra.
+                    const key_osproductversion = "kern.osproductversion"; // eg. "10.15.4"
+                    size = scbuf.len;
+                    if (std.os.sysctlbynameZ(key_osproductversion, &scbuf, &size, null, 0)) |_| {
+                        const string_version = scbuf[0 .. size - 1];
+                        if (std.builtin.Version.parse(string_version)) |ver| {
+                            os.version_range.semver.min = ver;
+                            os.version_range.semver.max = ver;
+                        } else |err| switch (err) {
+                            error.Overflow => {},
+                            error.InvalidCharacter => {},
+                            error.InvalidVersion => {},
+                        }
                     } else |err| switch (err) {
-                        error.Overflow => {},
-                        error.InvalidCharacter => {},
-                        error.InvalidVersion => {},
+                        error.UnknownName => {
+                            const key_osversion = "kern.osversion"; // eg. "19E287"
+                            size = scbuf.len;
+                            std.os.sysctlbynameZ(key_osversion, &scbuf, &size, null, 0) catch {
+                                @panic("unable to detect macOS version: " ++ key_osversion);
+                            };
+                            if (macos.version_from_build(scbuf[0 .. size - 1])) |ver| {
+                                os.version_range.semver.min = ver;
+                                os.version_range.semver.max = ver;
+                            } else |_| {}
+                        },
+                        else => @panic("unable to detect macOS version: " ++ key_osproductversion),
                     }
                 },
                 .freebsd => {
-                    // Unimplemented, fall back to default.
-                    // https://github.com/ziglang/zig/issues/4582
+                    var osreldate: u32 = undefined;
+                    var len: usize = undefined;
+
+                    std.os.sysctlbynameZ("kern.osreldate", &osreldate, &len, null, 0) catch |err| switch (err) {
+                        error.NameTooLong => unreachable, // constant, known good value
+                        error.PermissionDenied => unreachable, // only when setting values,
+                        error.SystemResources => unreachable, // memory already on the stack
+                        error.UnknownName => unreachable, // constant, known good value
+                        error.Unexpected => unreachable, // EFAULT: stack should be safe, EISDIR/ENOTDIR: constant, known good value
+                    };
+
+                    // https://www.freebsd.org/doc/en_US.ISO8859-1/books/porters-handbook/versions.html
+                    // Major * 100,000 has been convention since FreeBSD 2.2 (1997)
+                    // Minor * 1(0),000 summed has been convention since FreeBSD 2.2 (1997)
+                    // e.g. 492101 = 4.11-STABLE = 4.(9+2)
+                    const major = osreldate / 100_000;
+                    const minor1 = osreldate % 100_000 / 10_000; // usually 0 since 5.1
+                    const minor2 = osreldate % 10_000 / 1_000; // 0 before 5.1, minor version since
+                    const patch = osreldate % 1_000;
+                    os.version_range.semver.min = .{ .major = major, .minor = minor1 + minor2, .patch = patch };
+                    os.version_range.semver.max = .{ .major = major, .minor = minor1 + minor2, .patch = patch };
                 },
                 else => {
                     // Unimplemented, fall back to default version range.
@@ -363,6 +390,12 @@ pub const NativeTargetInfo = struct {
         if (!native_target_has_ld or have_all_info or os_is_non_native) {
             return defaultAbiAndDynamicLinker(cpu, os, cross_target);
         }
+        if (cross_target.abi) |abi| {
+            if (abi.isMusl()) {
+                // musl implies static linking.
+                return defaultAbiAndDynamicLinker(cpu, os, cross_target);
+            }
+        }
         // The current target's ABI cannot be relied on for this. For example, we may build the zig
         // compiler for target riscv64-linux-musl and provide a tarball for users to download.
         // A user could then run that zig compiler on riscv64-linux-gnu. This use case is well-defined
@@ -410,7 +443,12 @@ pub const NativeTargetInfo = struct {
         // over our own shared objects and find a dynamic linker.
         self_exe: {
             const lib_paths = try std.process.getSelfExeSharedLibPaths(allocator);
-            defer allocator.free(lib_paths);
+            defer {
+                for (lib_paths) |lib_path| {
+                    allocator.free(lib_path);
+                }
+                allocator.free(lib_paths);
+            }
 
             var found_ld_info: LdInfo = undefined;
             var found_ld_path: [:0]const u8 = undefined;
@@ -460,7 +498,7 @@ pub const NativeTargetInfo = struct {
             return result;
         }
 
-        const env_file = std.fs.openFileAbsoluteC("/usr/bin/env", .{}) catch |err| switch (err) {
+        const env_file = std.fs.openFileAbsoluteZ("/usr/bin/env", .{}) catch |err| switch (err) {
             error.NoSpaceLeft => unreachable,
             error.NameTooLong => unreachable,
             error.PathAlreadyExists => unreachable,
@@ -468,6 +506,8 @@ pub const NativeTargetInfo = struct {
             error.InvalidUtf8 => unreachable,
             error.BadPathName => unreachable,
             error.PipeBusy => unreachable,
+            error.FileLocksNotSupported => unreachable,
+            error.WouldBlock => unreachable,
 
             error.IsDir,
             error.NotDir,
@@ -512,7 +552,7 @@ pub const NativeTargetInfo = struct {
 
     fn glibcVerFromSO(so_path: [:0]const u8) !std.builtin.Version {
         var link_buf: [std.os.PATH_MAX]u8 = undefined;
-        const link_name = std.os.readlinkC(so_path.ptr, &link_buf) catch |err| switch (err) {
+        const link_name = std.os.readlinkZ(so_path.ptr, &link_buf) catch |err| switch (err) {
             error.AccessDenied => return error.GnuLibCVersionUnavailable,
             error.FileSystem => return error.FileSystem,
             error.SymLinkLoop => return error.SymLinkLoop,
@@ -521,6 +561,9 @@ pub const NativeTargetInfo = struct {
             error.SystemResources => return error.SystemResources,
             error.NotDir => return error.GnuLibCVersionUnavailable,
             error.Unexpected => return error.GnuLibCVersionUnavailable,
+            error.InvalidUtf8 => unreachable, // Windows only
+            error.BadPathName => unreachable, // Windows only
+            error.UnsupportedReparsePointType => unreachable, // Windows only
         };
         return glibcVerFromLinkName(link_name);
     }
@@ -622,9 +665,10 @@ pub const NativeTargetInfo = struct {
                         const p_offset = elfInt(is_64, need_bswap, ph32.p_offset, ph64.p_offset);
                         const p_filesz = elfInt(is_64, need_bswap, ph32.p_filesz, ph64.p_filesz);
                         if (p_filesz > result.dynamic_linker.buffer.len) return error.NameTooLong;
-                        _ = try preadMin(file, result.dynamic_linker.buffer[0..p_filesz], p_offset, p_filesz);
-                        // PT_INTERP includes a null byte in p_filesz.
-                        const len = p_filesz - 1;
+                        const filesz = @intCast(usize, p_filesz);
+                        _ = try preadMin(file, result.dynamic_linker.buffer[0..filesz], p_offset, filesz);
+                        // PT_INTERP includes a null byte in filesz.
+                        const len = filesz - 1;
                         // dynamic_linker.max_byte is "max", not "len".
                         // We know it will fit in u8 because we check against dynamic_linker.buffer.len above.
                         result.dynamic_linker.max_byte = @intCast(u8, len - 1);
@@ -645,7 +689,7 @@ pub const NativeTargetInfo = struct {
                     {
                         var dyn_off = elfInt(is_64, need_bswap, ph32.p_offset, ph64.p_offset);
                         const p_filesz = elfInt(is_64, need_bswap, ph32.p_filesz, ph64.p_filesz);
-                        const dyn_size: u64 = if (is_64) @sizeOf(elf.Elf64_Dyn) else @sizeOf(elf.Elf32_Dyn);
+                        const dyn_size: usize = if (is_64) @sizeOf(elf.Elf64_Dyn) else @sizeOf(elf.Elf32_Dyn);
                         const dyn_num = p_filesz / dyn_size;
                         var dyn_buf: [16 * @sizeOf(elf.Elf64_Dyn)]u8 align(@alignOf(elf.Elf64_Dyn)) = undefined;
                         var dyn_i: usize = 0;
@@ -736,7 +780,7 @@ pub const NativeTargetInfo = struct {
                         );
                         const sh_name_off = elfInt(is_64, need_bswap, sh32.sh_name, sh64.sh_name);
                         // TODO this pointer cast should not be necessary
-                        const sh_name = mem.toSliceConst(u8, @ptrCast([*:0]u8, shstrtab[sh_name_off..].ptr));
+                        const sh_name = mem.spanZ(@ptrCast([*:0]u8, shstrtab[sh_name_off..].ptr));
                         if (mem.eql(u8, sh_name, ".dynstr")) {
                             break :find_dyn_str .{
                                 .offset = elfInt(is_64, need_bswap, sh32.sh_offset, sh64.sh_offset),
@@ -751,7 +795,10 @@ pub const NativeTargetInfo = struct {
                     const strtab_read_len = try preadMin(file, &strtab_buf, ds.offset, shstrtab_len);
                     const strtab = strtab_buf[0..strtab_read_len];
                     // TODO this pointer cast should not be necessary
-                    const rpath_list = mem.toSliceConst(u8, @ptrCast([*:0]u8, strtab[rpoff..].ptr));
+                    const rpoff_usize = std.math.cast(usize, rpoff) catch |err| switch (err) {
+                        error.Overflow => return error.InvalidElfFile,
+                    };
+                    const rpath_list = mem.spanZ(@ptrCast([*:0]u8, strtab[rpoff_usize..].ptr));
                     var it = mem.tokenize(rpath_list, ":");
                     while (it.next()) |rpath| {
                         var dir = fs.cwd().openDir(rpath, .{}) catch |err| switch (err) {
@@ -776,12 +823,15 @@ pub const NativeTargetInfo = struct {
                         defer dir.close();
 
                         var link_buf: [std.os.PATH_MAX]u8 = undefined;
-                        const link_name = std.os.readlinkatC(
+                        const link_name = std.os.readlinkatZ(
                             dir.fd,
                             glibc_so_basename,
                             &link_buf,
                         ) catch |err| switch (err) {
                             error.NameTooLong => unreachable,
+                            error.InvalidUtf8 => unreachable, // Windows only
+                            error.BadPathName => unreachable, // Windows only
+                            error.UnsupportedReparsePointType => unreachable, // Windows only
 
                             error.AccessDenied,
                             error.FileNotFound,
@@ -811,18 +861,21 @@ pub const NativeTargetInfo = struct {
     }
 
     fn preadMin(file: fs.File, buf: []u8, offset: u64, min_read_len: usize) !usize {
-        var i: u64 = 0;
+        var i: usize = 0;
         while (i < min_read_len) {
             const len = file.pread(buf[i .. buf.len - i], offset + i) catch |err| switch (err) {
                 error.OperationAborted => unreachable, // Windows-only
                 error.WouldBlock => unreachable, // Did not request blocking mode
+                error.NotOpenForReading => unreachable,
                 error.SystemResources => return error.SystemResources,
                 error.IsDir => return error.UnableToReadElfFile,
                 error.BrokenPipe => return error.UnableToReadElfFile,
                 error.Unseekable => return error.UnableToReadElfFile,
                 error.ConnectionResetByPeer => return error.UnableToReadElfFile,
+                error.ConnectionTimedOut => return error.UnableToReadElfFile,
                 error.Unexpected => return error.Unexpected,
                 error.InputOutput => return error.FileSystem,
+                error.AccessDenied => return error.Unexpected,
             };
             if (len == 0) return error.UnexpectedEndOfFile;
             i += len;
@@ -850,7 +903,7 @@ pub const NativeTargetInfo = struct {
         abi: Target.Abi,
     };
 
-    pub fn elfInt(is_64: bool, need_bswap: bool, int_32: var, int_64: var) @TypeOf(int_64) {
+    pub fn elfInt(is_64: bool, need_bswap: bool, int_32: anytype, int_64: anytype) @TypeOf(int_64) {
         if (is_64) {
             if (need_bswap) {
                 return @byteSwap(@TypeOf(int_64), int_64);
@@ -882,3 +935,7 @@ pub const NativeTargetInfo = struct {
         }
     }
 };
+
+test "" {
+    _ = @import("system/macos.zig");
+}

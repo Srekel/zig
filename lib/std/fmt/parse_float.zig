@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 // Adapted from https://github.com/grzegorz-kraszewski/stringtofloat.
 
 // MIT License
@@ -30,8 +35,11 @@
 // - Does not handle denormals
 
 const std = @import("../std.zig");
+const ascii = std.ascii;
 
-const max_digits = 25;
+// The mantissa field in FloatRepr is 64bit wide and holds only 19 digits
+// without overflowing
+const max_digits = 19;
 
 const f64_plus_zero: u64 = 0x0000000000000000;
 const f64_minus_zero: u64 = 0x8000000000000000;
@@ -190,14 +198,6 @@ const ParseResult = enum {
     MinusInf,
 };
 
-inline fn isDigit(c: u8) bool {
-    return c >= '0' and c <= '9';
-}
-
-inline fn isSpace(c: u8) bool {
-    return (c >= 0x09 and c <= 0x13) or c == 0x20;
-}
-
 fn parseRepr(s: []const u8, n: *FloatRepr) !ParseResult {
     var digit_index: usize = 0;
     var negative = false;
@@ -207,52 +207,49 @@ fn parseRepr(s: []const u8, n: *FloatRepr) !ParseResult {
     var state = State.MaybeSign;
 
     var i: usize = 0;
-    loop: while (i < s.len) {
+    while (i < s.len) {
         const c = s[i];
 
         switch (state) {
-            State.MaybeSign => {
-                state = State.LeadingMantissaZeros;
+            .MaybeSign => {
+                state = .LeadingMantissaZeros;
 
                 if (c == '+') {
                     i += 1;
                 } else if (c == '-') {
                     n.negative = true;
                     i += 1;
-                } else if (isDigit(c) or c == '.') {
+                } else if (ascii.isDigit(c) or c == '.') {
                     // continue
                 } else {
                     return error.InvalidCharacter;
                 }
             },
-
-            State.LeadingMantissaZeros => {
+            .LeadingMantissaZeros => {
                 if (c == '0') {
                     i += 1;
                 } else if (c == '.') {
                     i += 1;
-                    state = State.LeadingFractionalZeros;
+                    state = .LeadingFractionalZeros;
                 } else {
-                    state = State.MantissaIntegral;
+                    state = .MantissaIntegral;
                 }
             },
-
-            State.LeadingFractionalZeros => {
+            .LeadingFractionalZeros => {
                 if (c == '0') {
                     i += 1;
                     if (n.exponent > std.math.minInt(i32)) {
                         n.exponent -= 1;
                     }
                 } else {
-                    state = State.MantissaFractional;
+                    state = .MantissaFractional;
                 }
             },
-
-            State.MantissaIntegral => {
-                if (isDigit(c)) {
+            .MantissaIntegral => {
+                if (ascii.isDigit(c)) {
                     if (digit_index < max_digits) {
                         n.mantissa *%= 10;
-                        n.mantissa += s[i] - '0';
+                        n.mantissa += c - '0';
                         digit_index += 1;
                     } else if (n.exponent < std.math.maxInt(i32)) {
                         n.exponent += 1;
@@ -261,14 +258,13 @@ fn parseRepr(s: []const u8, n: *FloatRepr) !ParseResult {
                     i += 1;
                 } else if (c == '.') {
                     i += 1;
-                    state = State.MantissaFractional;
+                    state = .MantissaFractional;
                 } else {
-                    state = State.MantissaFractional;
+                    state = .MantissaFractional;
                 }
             },
-
-            State.MantissaFractional => {
-                if (isDigit(c)) {
+            .MantissaFractional => {
+                if (ascii.isDigit(c)) {
                     if (digit_index < max_digits) {
                         n.mantissa *%= 10;
                         n.mantissa += c - '0';
@@ -279,13 +275,12 @@ fn parseRepr(s: []const u8, n: *FloatRepr) !ParseResult {
                     i += 1;
                 } else if (c == 'e' or c == 'E') {
                     i += 1;
-                    state = State.ExponentSign;
+                    state = .ExponentSign;
                 } else {
-                    state = State.ExponentSign;
+                    state = .ExponentSign;
                 }
             },
-
-            State.ExponentSign => {
+            .ExponentSign => {
                 if (c == '+') {
                     i += 1;
                 } else if (c == '-') {
@@ -293,20 +288,18 @@ fn parseRepr(s: []const u8, n: *FloatRepr) !ParseResult {
                     i += 1;
                 }
 
-                state = State.LeadingExponentZeros;
+                state = .LeadingExponentZeros;
             },
-
-            State.LeadingExponentZeros => {
+            .LeadingExponentZeros => {
                 if (c == '0') {
                     i += 1;
                 } else {
-                    state = State.Exponent;
+                    state = .Exponent;
                 }
             },
-
-            State.Exponent => {
-                if (isDigit(c)) {
-                    if (exponent < std.math.maxInt(i32)) {
+            .Exponent => {
+                if (ascii.isDigit(c)) {
+                    if (exponent < std.math.maxInt(i32) / 10) {
                         exponent *= 10;
                         exponent += @intCast(i32, c - '0');
                     }
@@ -323,29 +316,21 @@ fn parseRepr(s: []const u8, n: *FloatRepr) !ParseResult {
     n.exponent += exponent;
 
     if (n.mantissa == 0) {
-        return if (n.negative) ParseResult.MinusZero else ParseResult.PlusZero;
+        return if (n.negative) .MinusZero else .PlusZero;
     } else if (n.exponent > 309) {
-        return if (n.negative) ParseResult.MinusInf else ParseResult.PlusInf;
+        return if (n.negative) .MinusInf else .PlusInf;
     } else if (n.exponent < -328) {
-        return if (n.negative) ParseResult.MinusZero else ParseResult.PlusZero;
+        return if (n.negative) .MinusZero else .PlusZero;
     }
 
-    return ParseResult.Ok;
-}
-
-inline fn isLower(c: u8) bool {
-    return c -% 'a' < 26;
-}
-
-inline fn toUpper(c: u8) u8 {
-    return if (isLower(c)) (c & 0x5f) else c;
+    return .Ok;
 }
 
 fn caseInEql(a: []const u8, b: []const u8) bool {
     if (a.len != b.len) return false;
 
     for (a) |_, i| {
-        if (toUpper(a[i]) != toUpper(b[i])) {
+        if (ascii.toUpper(a[i]) != ascii.toUpper(b[i])) {
             return false;
         }
     }
@@ -373,11 +358,11 @@ pub fn parseFloat(comptime T: type, s: []const u8) !T {
     };
 
     return switch (try parseRepr(s, &r)) {
-        ParseResult.Ok => convertRepr(T, r),
-        ParseResult.PlusZero => 0.0,
-        ParseResult.MinusZero => -@as(T, 0.0),
-        ParseResult.PlusInf => std.math.inf(T),
-        ParseResult.MinusInf => -std.math.inf(T),
+        .Ok => convertRepr(T, r),
+        .PlusZero => 0.0,
+        .MinusZero => -@as(T, 0.0),
+        .PlusInf => std.math.inf(T),
+        .MinusInf => -std.math.inf(T),
     };
 }
 
@@ -385,45 +370,48 @@ test "fmt.parseFloat" {
     const testing = std.testing;
     const expect = testing.expect;
     const expectEqual = testing.expectEqual;
-    const approxEq = std.math.approxEq;
+    const approxEqAbs = std.math.approxEqAbs;
     const epsilon = 1e-7;
 
     inline for ([_]type{ f16, f32, f64, f128 }) |T| {
-        const Z = std.meta.IntType(false, T.bit_count);
+        const Z = std.meta.Int(.unsigned, @typeInfo(T).Float.bits);
 
         testing.expectError(error.InvalidCharacter, parseFloat(T, ""));
         testing.expectError(error.InvalidCharacter, parseFloat(T, "   1"));
         testing.expectError(error.InvalidCharacter, parseFloat(T, "1abc"));
 
         expectEqual(try parseFloat(T, "0"), 0.0);
-        expectEqual((try parseFloat(T, "0")), 0.0);
-        expectEqual((try parseFloat(T, "+0")), 0.0);
-        expectEqual((try parseFloat(T, "-0")), 0.0);
+        expectEqual(try parseFloat(T, "0"), 0.0);
+        expectEqual(try parseFloat(T, "+0"), 0.0);
+        expectEqual(try parseFloat(T, "-0"), 0.0);
 
-        expectEqual((try parseFloat(T, "0e0")), 0);
-        expectEqual((try parseFloat(T, "2e3")), 2000.0);
-        expectEqual((try parseFloat(T, "1e0")), 1.0);
-        expectEqual((try parseFloat(T, "-2e3")), -2000.0);
-        expectEqual((try parseFloat(T, "-1e0")), -1.0);
-        expectEqual((try parseFloat(T, "1.234e3")), 1234);
+        expectEqual(try parseFloat(T, "0e0"), 0);
+        expectEqual(try parseFloat(T, "2e3"), 2000.0);
+        expectEqual(try parseFloat(T, "1e0"), 1.0);
+        expectEqual(try parseFloat(T, "-2e3"), -2000.0);
+        expectEqual(try parseFloat(T, "-1e0"), -1.0);
+        expectEqual(try parseFloat(T, "1.234e3"), 1234);
 
-        expect(approxEq(T, try parseFloat(T, "3.141"), 3.141, epsilon));
-        expect(approxEq(T, try parseFloat(T, "-3.141"), -3.141, epsilon));
+        expect(approxEqAbs(T, try parseFloat(T, "3.141"), 3.141, epsilon));
+        expect(approxEqAbs(T, try parseFloat(T, "-3.141"), -3.141, epsilon));
 
-        expectEqual((try parseFloat(T, "1e-700")), 0);
-        expectEqual((try parseFloat(T, "1e+700")), std.math.inf(T));
+        expectEqual(try parseFloat(T, "1e-700"), 0);
+        expectEqual(try parseFloat(T, "1e+700"), std.math.inf(T));
 
         expectEqual(@bitCast(Z, try parseFloat(T, "nAn")), @bitCast(Z, std.math.nan(T)));
-        expectEqual((try parseFloat(T, "inF")), std.math.inf(T));
-        expectEqual((try parseFloat(T, "-INF")), -std.math.inf(T));
+        expectEqual(try parseFloat(T, "inF"), std.math.inf(T));
+        expectEqual(try parseFloat(T, "-INF"), -std.math.inf(T));
+
+        expectEqual(try parseFloat(T, "0.4e0066999999999999999999999999999999999999999999999999999"), std.math.inf(T));
 
         if (T != f16) {
-            expect(approxEq(T, try parseFloat(T, "1e-2"), 0.01, epsilon));
-            expect(approxEq(T, try parseFloat(T, "1234e-2"), 12.34, epsilon));
+            expect(approxEqAbs(T, try parseFloat(T, "1e-2"), 0.01, epsilon));
+            expect(approxEqAbs(T, try parseFloat(T, "1234e-2"), 12.34, epsilon));
 
-            expect(approxEq(T, try parseFloat(T, "123142.1"), 123142.1, epsilon));
-            expect(approxEq(T, try parseFloat(T, "-123142.1124"), @as(T, -123142.1124), epsilon));
-            expect(approxEq(T, try parseFloat(T, "0.7062146892655368"), @as(T, 0.7062146892655368), epsilon));
+            expect(approxEqAbs(T, try parseFloat(T, "123142.1"), 123142.1, epsilon));
+            expect(approxEqAbs(T, try parseFloat(T, "-123142.1124"), @as(T, -123142.1124), epsilon));
+            expect(approxEqAbs(T, try parseFloat(T, "0.7062146892655368"), @as(T, 0.7062146892655368), epsilon));
+            expect(approxEqAbs(T, try parseFloat(T, "2.71828182845904523536"), @as(T, 2.718281828459045), epsilon));
         }
     }
 }

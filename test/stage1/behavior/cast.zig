@@ -2,6 +2,7 @@ const std = @import("std");
 const expect = std.testing.expect;
 const mem = std.mem;
 const maxInt = std.math.maxInt;
+const Vector = std.meta.Vector;
 
 test "int to ptr cast" {
     const x = @as(usize, 13);
@@ -16,6 +17,9 @@ test "integer literal to pointer cast" {
 }
 
 test "pointer reinterpret const float to int" {
+    // https://github.com/ziglang/zig/issues/3345
+    if (std.Target.current.cpu.arch == .mips) return error.SkipZigTest;
+
     const float: f64 = 5.99999999999994648725e-01;
     const float_ptr = &float;
     const int_ptr = @ptrCast(*const i32, float_ptr);
@@ -329,7 +333,7 @@ fn testCastPtrOfArrayToSliceAndPtr() void {
 test "cast *[1][*]const u8 to [*]const ?[*]const u8" {
     const window_name = [1][*]const u8{"window name"};
     const x: [*]const ?[*]const u8 = &window_name;
-    expect(mem.eql(u8, std.mem.toSliceConst(u8, @ptrCast([*:0]const u8, x[0].?)), "window name"));
+    expect(mem.eql(u8, std.mem.spanZ(@ptrCast([*:0]const u8, x[0].?)), "window name"));
 }
 
 test "@intCast comptime_int" {
@@ -361,6 +365,43 @@ test "@floatCast comptime_int and comptime_float" {
     }
 }
 
+test "vector casts" {
+    const S = struct {
+        fn doTheTest() void {
+            // Upcast (implicit, equivalent to @intCast)
+            var up0: Vector(2, u8) = [_]u8{ 0x55, 0xaa };
+            var up1 = @as(Vector(2, u16), up0);
+            var up2 = @as(Vector(2, u32), up0);
+            var up3 = @as(Vector(2, u64), up0);
+            // Downcast (safety-checked)
+            var down0 = up3;
+            var down1 = @intCast(Vector(2, u32), down0);
+            var down2 = @intCast(Vector(2, u16), down0);
+            var down3 = @intCast(Vector(2, u8), down0);
+
+            expect(mem.eql(u16, &@as([2]u16, up1), &[2]u16{ 0x55, 0xaa }));
+            expect(mem.eql(u32, &@as([2]u32, up2), &[2]u32{ 0x55, 0xaa }));
+            expect(mem.eql(u64, &@as([2]u64, up3), &[2]u64{ 0x55, 0xaa }));
+
+            expect(mem.eql(u32, &@as([2]u32, down1), &[2]u32{ 0x55, 0xaa }));
+            expect(mem.eql(u16, &@as([2]u16, down2), &[2]u16{ 0x55, 0xaa }));
+            expect(mem.eql(u8, &@as([2]u8, down3), &[2]u8{ 0x55, 0xaa }));
+        }
+
+        fn doTheTestFloat() void {
+            var vec = @splat(2, @as(f32, 1234.0));
+            var wider: Vector(2, f64) = vec;
+            expect(wider[0] == 1234.0);
+            expect(wider[1] == 1234.0);
+        }
+    };
+
+    S.doTheTest();
+    comptime S.doTheTest();
+    S.doTheTestFloat();
+    comptime S.doTheTestFloat();
+}
+
 test "comptime_int @intToFloat" {
     {
         const result = @intToFloat(f16, 1234);
@@ -372,6 +413,22 @@ test "comptime_int @intToFloat" {
         expect(@TypeOf(result) == f32);
         expect(result == 1234.0);
     }
+    {
+        const result = @intToFloat(f64, 1234);
+        expect(@TypeOf(result) == f64);
+        expect(result == 1234.0);
+    }
+    {
+        const result = @intToFloat(f128, 1234);
+        expect(@TypeOf(result) == f128);
+        expect(result == 1234.0);
+    }
+    // big comptime_int (> 64 bits) to f128 conversion
+    {
+        const result = @intToFloat(f128, 0x1_0000_0000_0000_0000);
+        expect(@TypeOf(result) == f128);
+        expect(result == 0x1_0000_0000_0000_0000.0);
+    }
 }
 
 test "@intCast i32 to u7" {
@@ -379,6 +436,19 @@ test "@intCast i32 to u7" {
     var y: i32 = 120;
     var z = x >> @intCast(u7, y);
     expect(z == 0xff);
+}
+
+test "@floatCast cast down" {
+    {
+        var double: f64 = 0.001534;
+        var single = @floatCast(f32, double);
+        expect(single == 0.001534);
+    }
+    {
+        const double: f64 = 0.001534;
+        const single = @floatCast(f32, double);
+        expect(single == 0.001534);
+    }
 }
 
 test "implicit cast undefined to optional" {
@@ -759,7 +829,7 @@ test "variable initialization uses result locations properly with regards to the
 
 test "cast between [*c]T and ?[*:0]T on fn parameter" {
     const S = struct {
-        const Handler = ?extern fn ([*c]const u8) void;
+        const Handler = ?fn ([*c]const u8) callconv(.C) void;
         fn addCallback(handler: Handler) void {}
 
         fn myCallback(cstr: ?[*:0]const u8) callconv(.C) void {}
@@ -789,4 +859,52 @@ var global_struct: struct { f0: usize } = undefined;
 test "assignment to optional pointer result loc" {
     var foo: struct { ptr: ?*c_void } = .{ .ptr = &global_struct };
     expect(foo.ptr.? == @ptrCast(*c_void, &global_struct));
+}
+
+test "peer type resolve string lit with sentinel-terminated mutable slice" {
+    var array: [4:0]u8 = undefined;
+    array[4] = 0; // TODO remove this when #4372 is solved
+    var slice: [:0]u8 = array[0..4 :0];
+    comptime expect(@TypeOf(slice, "hi") == [:0]const u8);
+    comptime expect(@TypeOf("hi", slice) == [:0]const u8);
+}
+
+test "peer type resolve array pointers, one of them const" {
+    var array1: [4]u8 = undefined;
+    const array2: [5]u8 = undefined;
+    comptime expect(@TypeOf(&array1, &array2) == []const u8);
+    comptime expect(@TypeOf(&array2, &array1) == []const u8);
+}
+
+test "peer type resolve array pointer and unknown pointer" {
+    const const_array: [4]u8 = undefined;
+    var array: [4]u8 = undefined;
+    var const_ptr: [*]const u8 = undefined;
+    var ptr: [*]u8 = undefined;
+
+    comptime expect(@TypeOf(&array, ptr) == [*]u8);
+    comptime expect(@TypeOf(ptr, &array) == [*]u8);
+
+    comptime expect(@TypeOf(&const_array, ptr) == [*]const u8);
+    comptime expect(@TypeOf(ptr, &const_array) == [*]const u8);
+
+    comptime expect(@TypeOf(&array, const_ptr) == [*]const u8);
+    comptime expect(@TypeOf(const_ptr, &array) == [*]const u8);
+
+    comptime expect(@TypeOf(&const_array, const_ptr) == [*]const u8);
+    comptime expect(@TypeOf(const_ptr, &const_array) == [*]const u8);
+}
+
+test "comptime float casts" {
+    const a = @intToFloat(comptime_float, 1);
+    expect(a == 1);
+    expect(@TypeOf(a) == comptime_float);
+    const b = @floatToInt(comptime_int, 2);
+    expect(b == 2);
+    expect(@TypeOf(b) == comptime_int);
+}
+
+test "cast from ?[*]T to ??[*]T" {
+    const a: ??[*]u8 = @as(?[*]u8, null);
+    expect(a != null and a.? == null);
 }

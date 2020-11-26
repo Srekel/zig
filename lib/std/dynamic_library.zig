@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const builtin = @import("builtin");
 
 const std = @import("std.zig");
@@ -14,7 +19,7 @@ const max = std.math.max;
 pub const DynLib = switch (builtin.os.tag) {
     .linux => if (builtin.link_libc) DlDynlib else ElfDynLib,
     .windows => WindowsDynLib,
-    .macosx, .tvos, .watchos, .ios, .freebsd => DlDynlib,
+    .macos, .tvos, .watchos, .ios, .freebsd, .openbsd => DlDynlib,
     else => void,
 };
 
@@ -33,11 +38,11 @@ const LinkMap = extern struct {
     pub const Iterator = struct {
         current: ?*LinkMap,
 
-        fn end(self: *Iterator) bool {
+        pub fn end(self: *Iterator) bool {
             return self.current == null;
         }
 
-        fn next(self: *Iterator) ?*LinkMap {
+        pub fn next(self: *Iterator) ?*LinkMap {
             if (self.current) |it| {
                 self.current = it.l_next;
                 return it;
@@ -54,48 +59,42 @@ const RDebug = extern struct {
     r_ldbase: usize,
 };
 
-fn elf_get_va_offset(phdrs: []elf.Phdr) !usize {
-    for (phdrs) |*phdr| {
-        if (phdr.p_type == elf.PT_LOAD) {
-            return @ptrToInt(phdr) - phdr.p_vaddr;
-        }
-    }
-    return error.InvalidExe;
+/// TODO make it possible to reference this same external symbol 2x so we don't need this
+/// helper function.
+pub fn get_DYNAMIC() ?[*]elf.Dyn {
+    return @extern([*]elf.Dyn, .{ .name = "_DYNAMIC", .linkage = .Weak });
 }
 
 pub fn linkmap_iterator(phdrs: []elf.Phdr) !LinkMap.Iterator {
-    const va_offset = try elf_get_va_offset(phdrs);
-
-    const dyn_table = init: {
-        for (phdrs) |*phdr| {
-            if (phdr.p_type == elf.PT_DYNAMIC) {
-                const ptr = @intToPtr([*]elf.Dyn, va_offset + phdr.p_vaddr);
-                break :init ptr[0 .. phdr.p_memsz / @sizeOf(elf.Dyn)];
-            }
-        }
+    const _DYNAMIC = get_DYNAMIC() orelse {
         // No PT_DYNAMIC means this is either a statically-linked program or a
-        // badly corrupted one
+        // badly corrupted dynamically-linked one.
         return LinkMap.Iterator{ .current = null };
     };
 
     const link_map_ptr = init: {
-        for (dyn_table) |*dyn| {
-            switch (dyn.d_tag) {
+        var i: usize = 0;
+        while (_DYNAMIC[i].d_tag != elf.DT_NULL) : (i += 1) {
+            switch (_DYNAMIC[i].d_tag) {
                 elf.DT_DEBUG => {
-                    const r_debug = @intToPtr(*RDebug, dyn.d_val);
-                    if (r_debug.r_version != 1) return error.InvalidExe;
-                    break :init r_debug.r_map;
+                    const ptr = @intToPtr(?*RDebug, _DYNAMIC[i].d_val);
+                    if (ptr) |r_debug| {
+                        if (r_debug.r_version != 1) return error.InvalidExe;
+                        break :init r_debug.r_map;
+                    }
                 },
                 elf.DT_PLTGOT => {
-                    const got_table = @intToPtr([*]usize, dyn.d_val);
-                    // The address to the link_map structure is stored in the
-                    // second slot
-                    break :init @intToPtr(?*LinkMap, got_table[1]);
+                    const ptr = @intToPtr(?[*]usize, _DYNAMIC[i].d_val);
+                    if (ptr) |got_table| {
+                        // The address to the link_map structure is stored in
+                        // the second slot
+                        break :init @intToPtr(?*LinkMap, got_table[1]);
+                    }
                 },
                 else => {},
             }
         }
-        return error.InvalidExe;
+        return LinkMap.Iterator{ .current = null };
     };
 
     return LinkMap.Iterator{ .current = link_map_ptr };
@@ -254,9 +253,11 @@ pub const ElfDynLib = struct {
         };
     }
 
+    pub const openC = @compileError("deprecated: renamed to openZ");
+
     /// Trusts the file. Malicious file will be able to execute arbitrary code.
-    pub fn openC(path_c: [*:0]const u8) !ElfDynLib {
-        return open(mem.toSlice(u8, path_c));
+    pub fn openZ(path_c: [*:0]const u8) !ElfDynLib {
+        return open(mem.spanZ(path_c));
     }
 
     /// Trusts the file
@@ -285,7 +286,7 @@ pub const ElfDynLib = struct {
             if (0 == (@as(u32, 1) << @intCast(u5, self.syms[i].st_info & 0xf) & OK_TYPES)) continue;
             if (0 == (@as(u32, 1) << @intCast(u5, self.syms[i].st_info >> 4) & OK_BINDS)) continue;
             if (0 == self.syms[i].st_shndx) continue;
-            if (!mem.eql(u8, name, mem.toSliceConst(u8, self.strings + self.syms[i].st_name))) continue;
+            if (!mem.eql(u8, name, mem.spanZ(self.strings + self.syms[i].st_name))) continue;
             if (maybe_versym) |versym| {
                 if (!checkver(self.verdef.?, versym[i], vername, self.strings))
                     continue;
@@ -316,7 +317,7 @@ fn checkver(def_arg: *elf.Verdef, vsym_arg: i32, vername: []const u8, strings: [
         def = @intToPtr(*elf.Verdef, @ptrToInt(def) + def.vd_next);
     }
     const aux = @intToPtr(*elf.Verdaux, @ptrToInt(def) + def.vd_aux);
-    return mem.eql(u8, vername, mem.toSliceConst(u8, strings + aux.vda_name));
+    return mem.eql(u8, vername, mem.spanZ(strings + aux.vda_name));
 }
 
 pub const WindowsDynLib = struct {
@@ -326,12 +327,14 @@ pub const WindowsDynLib = struct {
 
     pub fn open(path: []const u8) !WindowsDynLib {
         const path_w = try windows.sliceToPrefixedFileW(path);
-        return openW(&path_w);
+        return openW(path_w.span().ptr);
     }
 
-    pub fn openC(path_c: [*:0]const u8) !WindowsDynLib {
+    pub const openC = @compileError("deprecated: renamed to openZ");
+
+    pub fn openZ(path_c: [*:0]const u8) !WindowsDynLib {
         const path_w = try windows.cStrToPrefixedFileW(path_c);
-        return openW(&path_w);
+        return openW(path_w.span().ptr);
     }
 
     pub fn openW(path_w: [*:0]const u16) !WindowsDynLib {
@@ -362,10 +365,12 @@ pub const DlDynlib = struct {
 
     pub fn open(path: []const u8) !DlDynlib {
         const path_c = try os.toPosixPath(path);
-        return openC(&path_c);
+        return openZ(&path_c);
     }
 
-    pub fn openC(path_c: [*:0]const u8) !DlDynlib {
+    pub const openC = @compileError("deprecated: renamed to openZ");
+
+    pub fn openZ(path_c: [*:0]const u8) !DlDynlib {
         return DlDynlib{
             .handle = system.dlopen(path_c, system.RTLD_LAZY) orelse {
                 return error.FileNotFound;
@@ -391,9 +396,9 @@ pub const DlDynlib = struct {
 
 test "dynamic_library" {
     const libname = switch (builtin.os.tag) {
-        .linux, .freebsd => "invalid_so.so",
+        .linux, .freebsd, .openbsd => "invalid_so.so",
         .windows => "invalid_dll.dll",
-        .macosx, .tvos, .watchos, .ios => "invalid_dylib.dylib",
+        .macos, .tvos, .watchos, .ios => "invalid_dylib.dylib",
         else => return error.SkipZigTest,
     };
 

@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 /// Operation not permitted
 pub const EPERM = 1;
 
@@ -367,6 +372,35 @@ pub const ENOMEDIUM = 123;
 
 /// Wrong medium type
 pub const EMEDIUMTYPE = 124;
+
+/// Operation canceled
+pub const ECANCELED = 125;
+
+/// Required key not available
+pub const ENOKEY = 126;
+
+/// Key has expired
+pub const EKEYEXPIRED = 127;
+
+/// Key has been revoked
+pub const EKEYREVOKED = 128;
+
+/// Key was rejected by service
+pub const EKEYREJECTED = 129;
+
+// for robust mutexes
+
+/// Owner died
+pub const EOWNERDEAD = 130;
+
+/// State not recoverable
+pub const ENOTRECOVERABLE = 131;
+
+/// Operation not possible due to RF-kill
+pub const ERFKILL = 132;
+
+/// Memory page has hardware error
+pub const EHWPOISON = 133;
 
 // nameserver query return codes
 

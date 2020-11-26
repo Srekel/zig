@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("../std.zig");
 const builtin = std.builtin;
 const io = std.io;
@@ -5,6 +10,7 @@ const assert = std.debug.assert;
 const math = std.math;
 const meta = std.meta;
 const trait = meta.trait;
+const testing = std.testing;
 
 pub const Packing = enum {
     /// Pack data to byte alignment
@@ -15,24 +21,26 @@ pub const Packing = enum {
 };
 
 /// Creates a deserializer that deserializes types from any stream.
-///  If `is_packed` is true, the data stream is treated as bit-packed,
-///  otherwise data is expected to be packed to the smallest byte.
-///  Types may implement a custom deserialization routine with a
-///  function named `deserialize` in the form of:
-///    pub fn deserialize(self: *Self, deserializer: var) !void
-///  which will be called when the deserializer is used to deserialize
-///  that type. It will pass a pointer to the type instance to deserialize
-///  into and a pointer to the deserializer struct.
-pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, comptime InStreamType: type) type {
+/// If `is_packed` is true, the data stream is treated as bit-packed,
+/// otherwise data is expected to be packed to the smallest byte.
+/// Types may implement a custom deserialization routine with a
+/// function named `deserialize` in the form of:
+/// ```
+/// pub fn deserialize(self: *Self, deserializer: anytype) !void
+/// ```
+/// which will be called when the deserializer is used to deserialize
+/// that type. It will pass a pointer to the type instance to deserialize
+/// into and a pointer to the deserializer struct.
+pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, comptime ReaderType: type) type {
     return struct {
-        in_stream: if (packing == .Bit) io.BitInStream(endian, InStreamType) else InStreamType,
+        in_stream: if (packing == .Bit) io.BitReader(endian, ReaderType) else ReaderType,
 
         const Self = @This();
 
-        pub fn init(in_stream: InStreamType) Self {
+        pub fn init(in_stream: ReaderType) Self {
             return Self{
                 .in_stream = switch (packing) {
-                    .Bit => io.bitInStream(endian, in_stream),
+                    .Bit => io.bitReader(endian, in_stream),
                     .Byte => in_stream,
                 },
             };
@@ -44,15 +52,15 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
         }
 
         //@BUG: inferred error issue. See: #1386
-        fn deserializeInt(self: *Self, comptime T: type) (InStreamType.Error || error{EndOfStream})!T {
+        fn deserializeInt(self: *Self, comptime T: type) (ReaderType.Error || error{EndOfStream})!T {
             comptime assert(trait.is(.Int)(T) or trait.is(.Float)(T));
 
             const u8_bit_count = 8;
             const t_bit_count = comptime meta.bitCount(T);
 
-            const U = std.meta.IntType(false, t_bit_count);
+            const U = std.meta.Int(.unsigned, t_bit_count);
             const Log2U = math.Log2Int(U);
-            const int_size = (U.bit_count + 7) / 8;
+            const int_size = (t_bit_count + 7) / 8;
 
             if (packing == .Bit) {
                 const result = try self.in_stream.readBitsNoEof(U, t_bit_count);
@@ -65,7 +73,7 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
 
             if (int_size == 1) {
                 if (t_bit_count == 8) return @bitCast(T, buffer[0]);
-                const PossiblySignedByte = std.meta.IntType(T.is_signed, 8);
+                const PossiblySignedByte = std.meta.Int(@typeInfo(T).Int.signedness, 8);
                 return @truncate(T, @bitCast(PossiblySignedByte, buffer[0]));
             }
 
@@ -92,7 +100,7 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
         }
 
         /// Deserializes data into the type pointed to by `ptr`
-        pub fn deserializeInto(self: *Self, ptr: var) !void {
+        pub fn deserializeInto(self: *Self, ptr: anytype) !void {
             const T = @TypeOf(ptr);
             comptime assert(trait.is(.Pointer)(T));
 
@@ -107,7 +115,7 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
             const C = comptime meta.Child(T);
             const child_type_id = @typeInfo(C);
 
-            //custom deserializer: fn(self: *Self, deserializer: var) !void
+            //custom deserializer: fn(self: *Self, deserializer: anytype) !void
             if (comptime trait.hasFn("deserialize")(C)) return C.deserialize(ptr, self);
 
             if (comptime trait.isPacked(C) and packing != .Bit) {
@@ -148,7 +156,7 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
                         const tag = try self.deserializeInt(TagInt);
 
                         inline for (info.fields) |field_info| {
-                            if (field_info.enum_field.?.value == tag) {
+                            if (@enumToInt(@field(TagType, field_info.name)) == tag) {
                                 const name = field_info.name;
                                 const FieldType = field_info.field_type;
                                 ptr.* = @unionInit(C, name, undefined);
@@ -189,24 +197,26 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
 pub fn deserializer(
     comptime endian: builtin.Endian,
     comptime packing: Packing,
-    in_stream: var,
+    in_stream: anytype,
 ) Deserializer(endian, packing, @TypeOf(in_stream)) {
     return Deserializer(endian, packing, @TypeOf(in_stream)).init(in_stream);
 }
 
 /// Creates a serializer that serializes types to any stream.
-///  If `is_packed` is true, the data will be bit-packed into the stream.
-///  Note that the you must call `serializer.flush()` when you are done
-///  writing bit-packed data in order ensure any unwritten bits are committed.
-///  If `is_packed` is false, data is packed to the smallest byte. In the case
-///  of packed structs, the struct will written bit-packed and with the specified
-///  endianess, after which data will resume being written at the next byte boundary.
-///  Types may implement a custom serialization routine with a
-///  function named `serialize` in the form of:
-///    pub fn serialize(self: Self, serializer: var) !void
-///  which will be called when the serializer is used to serialize that type. It will
-///  pass a const pointer to the type instance to be serialized and a pointer
-///  to the serializer struct.
+/// If `is_packed` is true, the data will be bit-packed into the stream.
+/// Note that the you must call `serializer.flush()` when you are done
+/// writing bit-packed data in order ensure any unwritten bits are committed.
+/// If `is_packed` is false, data is packed to the smallest byte. In the case
+/// of packed structs, the struct will written bit-packed and with the specified
+/// endianess, after which data will resume being written at the next byte boundary.
+/// Types may implement a custom serialization routine with a
+/// function named `serialize` in the form of:
+/// ```
+/// pub fn serialize(self: Self, serializer: anytype) !void
+/// ```
+/// which will be called when the serializer is used to serialize that type. It will
+/// pass a const pointer to the type instance to be serialized and a pointer
+/// to the serializer struct.
 pub fn Serializer(comptime endian: builtin.Endian, comptime packing: Packing, comptime OutStreamType: type) type {
     return struct {
         out_stream: if (packing == .Bit) io.BitOutStream(endian, OutStreamType) else OutStreamType,
@@ -228,16 +238,16 @@ pub fn Serializer(comptime endian: builtin.Endian, comptime packing: Packing, co
             if (packing == .Bit) return self.out_stream.flushBits();
         }
 
-        fn serializeInt(self: *Self, value: var) Error!void {
+        fn serializeInt(self: *Self, value: anytype) Error!void {
             const T = @TypeOf(value);
             comptime assert(trait.is(.Int)(T) or trait.is(.Float)(T));
 
             const t_bit_count = comptime meta.bitCount(T);
             const u8_bit_count = comptime meta.bitCount(u8);
 
-            const U = std.meta.IntType(false, t_bit_count);
+            const U = std.meta.Int(.unsigned, t_bit_count);
             const Log2U = math.Log2Int(U);
-            const int_size = (U.bit_count + 7) / 8;
+            const int_size = (t_bit_count + 7) / 8;
 
             const u_value = @bitCast(U, value);
 
@@ -260,7 +270,7 @@ pub fn Serializer(comptime endian: builtin.Endian, comptime packing: Packing, co
         }
 
         /// Serializes the passed value into the stream
-        pub fn serialize(self: *Self, value: var) Error!void {
+        pub fn serialize(self: *Self, value: anytype) Error!void {
             const T = comptime @TypeOf(value);
 
             if (comptime trait.isIndexable(T)) {
@@ -269,11 +279,11 @@ pub fn Serializer(comptime endian: builtin.Endian, comptime packing: Packing, co
                 return;
             }
 
-            //custom serializer: fn(self: Self, serializer: var) !void
+            //custom serializer: fn(self: Self, serializer: anytype) !void
             if (comptime trait.hasFn("serialize")(T)) return T.serialize(value, self);
 
             if (comptime trait.isPacked(T) and packing != .Bit) {
-                var packed_serializer = Serializer(endian, .Bit, Error).init(self.out_stream);
+                var packed_serializer = Serializer(endian, .Bit, OutStreamType).init(self.out_stream);
                 try packed_serializer.serialize(value);
                 try packed_serializer.flush();
                 return;
@@ -310,7 +320,7 @@ pub fn Serializer(comptime endian: builtin.Endian, comptime packing: Packing, co
                         // value, but @field requires a comptime value. Our alternative
                         // is to check each field for a match
                         inline for (info.fields) |field_info| {
-                            if (field_info.enum_field.?.value == @enumToInt(active_tag)) {
+                            if (@field(TagType, field_info.name) == active_tag) {
                                 const name = field_info.name;
                                 const FieldType = field_info.field_type;
                                 try self.serialize(@field(value, name));
@@ -345,7 +355,7 @@ pub fn Serializer(comptime endian: builtin.Endian, comptime packing: Packing, co
 pub fn serializer(
     comptime endian: builtin.Endian,
     comptime packing: Packing,
-    out_stream: var,
+    out_stream: anytype,
 ) Serializer(endian, packing, @TypeOf(out_stream)) {
     return Serializer(endian, packing, @TypeOf(out_stream)).init(out_stream);
 }
@@ -364,28 +374,28 @@ fn testIntSerializerDeserializer(comptime endian: builtin.Endian, comptime packi
 
     var data_mem: [total_bytes]u8 = undefined;
     var out = io.fixedBufferStream(&data_mem);
-    var serializer = serializer(endian, packing, out.outStream());
+    var _serializer = serializer(endian, packing, out.outStream());
 
     var in = io.fixedBufferStream(&data_mem);
-    var deserializer = Deserializer(endian, packing, in.inStream());
+    var _deserializer = deserializer(endian, packing, in.reader());
 
     comptime var i = 0;
     inline while (i <= max_test_bitsize) : (i += 1) {
-        const U = std.meta.IntType(false, i);
-        const S = std.meta.IntType(true, i);
-        try serializer.serializeInt(@as(U, i));
-        if (i != 0) try serializer.serializeInt(@as(S, -1)) else try serializer.serialize(@as(S, 0));
+        const U = std.meta.Int(.unsigned, i);
+        const S = std.meta.Int(.signed, i);
+        try _serializer.serializeInt(@as(U, i));
+        if (i != 0) try _serializer.serializeInt(@as(S, -1)) else try _serializer.serialize(@as(S, 0));
     }
-    try serializer.flush();
+    try _serializer.flush();
 
     i = 0;
     inline while (i <= max_test_bitsize) : (i += 1) {
-        const U = std.meta.IntType(false, i);
-        const S = std.meta.IntType(true, i);
-        const x = try deserializer.deserializeInt(U);
-        const y = try deserializer.deserializeInt(S);
-        expect(x == @as(U, i));
-        if (i != 0) expect(y == @as(S, -1)) else expect(y == 0);
+        const U = std.meta.Int(.unsigned, i);
+        const S = std.meta.Int(.signed, i);
+        const x = try _deserializer.deserializeInt(U);
+        const y = try _deserializer.deserializeInt(S);
+        testing.expect(x == @as(U, i));
+        if (i != 0) testing.expect(y == @as(S, -1)) else testing.expect(y == 0);
     }
 
     const u8_bit_count = comptime meta.bitCount(u8);
@@ -395,7 +405,7 @@ fn testIntSerializerDeserializer(comptime endian: builtin.Endian, comptime packi
     const extra_packed_byte = @boolToInt(total_bits % u8_bit_count > 0);
     const total_packed_bytes = (total_bits / u8_bit_count) + extra_packed_byte;
 
-    expect(in.pos == if (packing == .Bit) total_packed_bytes else total_bytes);
+    testing.expect(in.pos == if (packing == .Bit) total_packed_bytes else total_bytes);
 
     //Verify that empty error set works with serializer.
     //deserializer is covered by FixedBufferStream
@@ -421,35 +431,35 @@ fn testIntSerializerDeserializerInfNaN(
     var data_mem: [mem_size]u8 = undefined;
 
     var out = io.fixedBufferStream(&data_mem);
-    var serializer = serializer(endian, packing, out.outStream());
+    var _serializer = serializer(endian, packing, out.outStream());
 
     var in = io.fixedBufferStream(&data_mem);
-    var deserializer = deserializer(endian, packing, in.inStream());
+    var _deserializer = deserializer(endian, packing, in.reader());
 
     //@TODO: isInf/isNan not currently implemented for f128.
-    try serializer.serialize(std.math.nan(f16));
-    try serializer.serialize(std.math.inf(f16));
-    try serializer.serialize(std.math.nan(f32));
-    try serializer.serialize(std.math.inf(f32));
-    try serializer.serialize(std.math.nan(f64));
-    try serializer.serialize(std.math.inf(f64));
+    try _serializer.serialize(std.math.nan(f16));
+    try _serializer.serialize(std.math.inf(f16));
+    try _serializer.serialize(std.math.nan(f32));
+    try _serializer.serialize(std.math.inf(f32));
+    try _serializer.serialize(std.math.nan(f64));
+    try _serializer.serialize(std.math.inf(f64));
     //try serializer.serialize(std.math.nan(f128));
     //try serializer.serialize(std.math.inf(f128));
-    const nan_check_f16 = try deserializer.deserialize(f16);
-    const inf_check_f16 = try deserializer.deserialize(f16);
-    const nan_check_f32 = try deserializer.deserialize(f32);
-    deserializer.alignToByte();
-    const inf_check_f32 = try deserializer.deserialize(f32);
-    const nan_check_f64 = try deserializer.deserialize(f64);
-    const inf_check_f64 = try deserializer.deserialize(f64);
+    const nan_check_f16 = try _deserializer.deserialize(f16);
+    const inf_check_f16 = try _deserializer.deserialize(f16);
+    const nan_check_f32 = try _deserializer.deserialize(f32);
+    _deserializer.alignToByte();
+    const inf_check_f32 = try _deserializer.deserialize(f32);
+    const nan_check_f64 = try _deserializer.deserialize(f64);
+    const inf_check_f64 = try _deserializer.deserialize(f64);
     //const nan_check_f128 = try deserializer.deserialize(f128);
     //const inf_check_f128 = try deserializer.deserialize(f128);
-    expect(std.math.isNan(nan_check_f16));
-    expect(std.math.isInf(inf_check_f16));
-    expect(std.math.isNan(nan_check_f32));
-    expect(std.math.isInf(inf_check_f32));
-    expect(std.math.isNan(nan_check_f64));
-    expect(std.math.isInf(inf_check_f64));
+    testing.expect(std.math.isNan(nan_check_f16));
+    testing.expect(std.math.isInf(inf_check_f16));
+    testing.expect(std.math.isNan(nan_check_f32));
+    testing.expect(std.math.isInf(inf_check_f32));
+    testing.expect(std.math.isNan(nan_check_f64));
+    testing.expect(std.math.isInf(inf_check_f64));
     //expect(std.math.isNan(nan_check_f128));
     //expect(std.math.isInf(inf_check_f128));
 }
@@ -461,8 +471,8 @@ test "Serializer/Deserializer Int: Inf/NaN" {
     try testIntSerializerDeserializerInfNaN(.Little, .Bit);
 }
 
-fn testAlternateSerializer(self: var, serializer: var) !void {
-    try serializer.serialize(self.f_f16);
+fn testAlternateSerializer(self: anytype, _serializer: anytype) !void {
+    try _serializer.serialize(self.f_f16);
 }
 
 fn testSerializerDeserializer(comptime endian: builtin.Endian, comptime packing: io.Packing) !void {
@@ -502,8 +512,8 @@ fn testSerializerDeserializer(comptime endian: builtin.Endian, comptime packing:
         f_f16: f16,
         f_unused_u32: u32,
 
-        pub fn deserialize(self: *@This(), deserializer: var) !void {
-            try deserializer.deserializeInto(&self.f_f16);
+        pub fn deserialize(self: *@This(), _deserializer: anytype) !void {
+            try _deserializer.deserializeInto(&self.f_f16);
             self.f_unused_u32 = 47;
         }
 
@@ -550,15 +560,15 @@ fn testSerializerDeserializer(comptime endian: builtin.Endian, comptime packing:
 
     var data_mem: [@sizeOf(MyStruct)]u8 = undefined;
     var out = io.fixedBufferStream(&data_mem);
-    var serializer = serializer(endian, packing, out.outStream());
+    var _serializer = serializer(endian, packing, out.outStream());
 
     var in = io.fixedBufferStream(&data_mem);
-    var deserializer = deserializer(endian, packing, in.inStream());
+    var _deserializer = deserializer(endian, packing, in.reader());
 
-    try serializer.serialize(my_inst);
+    try _serializer.serialize(my_inst);
 
-    const my_copy = try deserializer.deserialize(MyStruct);
-    expect(meta.eql(my_copy, my_inst));
+    const my_copy = try _deserializer.deserialize(MyStruct);
+    testing.expect(meta.eql(my_copy, my_inst));
 }
 
 test "Serializer/Deserializer generic" {
@@ -584,18 +594,18 @@ fn testBadData(comptime endian: builtin.Endian, comptime packing: io.Packing) !v
     };
 
     var data_mem: [4]u8 = undefined;
-    var out = io.fixedBufferStream.init(&data_mem);
-    var serializer = serializer(endian, packing, out.outStream());
+    var out = io.fixedBufferStream(&data_mem);
+    var _serializer = serializer(endian, packing, out.outStream());
 
     var in = io.fixedBufferStream(&data_mem);
-    var deserializer = deserializer(endian, packing, in.inStream());
+    var _deserializer = deserializer(endian, packing, in.reader());
 
-    try serializer.serialize(@as(u14, 3));
-    expectError(error.InvalidEnumTag, deserializer.deserialize(A));
+    try _serializer.serialize(@as(u14, 3));
+    testing.expectError(error.InvalidEnumTag, _deserializer.deserialize(A));
     out.pos = 0;
-    try serializer.serialize(@as(u14, 3));
-    try serializer.serialize(@as(u14, 88));
-    expectError(error.InvalidEnumTag, deserializer.deserialize(C));
+    try _serializer.serialize(@as(u14, 3));
+    try _serializer.serialize(@as(u14, 88));
+    testing.expectError(error.InvalidEnumTag, _deserializer.deserialize(C));
 }
 
 test "Deserializer bad data" {

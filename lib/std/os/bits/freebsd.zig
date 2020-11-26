@@ -1,8 +1,17 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("../../std.zig");
 const maxInt = std.math.maxInt;
 
+// See https://svnweb.freebsd.org/base/head/sys/sys/_types.h?view=co
+// TODO: audit pid_t/mode_t. They should likely be i32 and u16, respectively
 pub const fd_t = c_int;
 pub const pid_t = c_int;
+pub const uid_t = u32;
+pub const gid_t = u32;
 pub const mode_t = c_uint;
 
 pub const socklen_t = u32;
@@ -49,6 +58,16 @@ pub const dl_phdr_info = extern struct {
     dlpi_name: ?[*:0]const u8,
     dlpi_phdr: [*]std.elf.Phdr,
     dlpi_phnum: u16,
+};
+
+pub const Flock = extern struct {
+    l_start: off_t,
+    l_len: off_t,
+    l_pid: pid_t,
+    l_type: i16,
+    l_whence: i16,
+    l_sysid: i32,
+    __unused: [4]u8,
 };
 
 pub const msghdr = extern struct {
@@ -100,21 +119,15 @@ pub const msghdr_const = extern struct {
 pub const off_t = i64;
 pub const ino_t = u64;
 
-/// Renamed to Stat to not conflict with the stat function.
-/// atime, mtime, and ctime have functions to return `timespec`,
-/// because although this is a POSIX API, the layout and names of
-/// the structs are inconsistent across operating systems, and
-/// in C, macros are used to hide the differences. Here we use
-/// methods to accomplish this.
-pub const Stat = extern struct {
+pub const libc_stat = extern struct {
     dev: u64,
     ino: ino_t,
     nlink: usize,
 
     mode: u16,
     __pad0: u16,
-    uid: u32,
-    gid: u32,
+    uid: uid_t,
+    gid: gid_t,
     __pad1: u32,
     rdev: u64,
 
@@ -130,15 +143,15 @@ pub const Stat = extern struct {
     gen: u64,
     __spare: [10]u64,
 
-    pub fn atime(self: Stat) timespec {
+    pub fn atime(self: @This()) timespec {
         return self.atim;
     }
 
-    pub fn mtime(self: Stat) timespec {
+    pub fn mtime(self: @This()) timespec {
         return self.mtim;
     }
 
-    pub fn ctime(self: Stat) timespec {
+    pub fn ctime(self: @This()) timespec {
         return self.ctim;
     }
 };
@@ -241,7 +254,6 @@ pub const MAP_NOSYNC = 0x0800;
 pub const MAP_ANON = 0x1000;
 pub const MAP_ANONYMOUS = MAP_ANON;
 pub const MAP_FILE = 0;
-pub const MAP_NORESERVE = 0;
 
 pub const MAP_GUARD = 0x00002000;
 pub const MAP_EXCL = 0x00004000;
@@ -315,6 +327,9 @@ pub const O_WRONLY = 0x0001;
 pub const O_RDWR = 0x0002;
 pub const O_ACCMODE = 0x0003;
 
+pub const O_SHLOCK = 0x0010;
+pub const O_EXLOCK = 0x0020;
+
 pub const O_CREAT = 0x0200;
 pub const O_EXCL = 0x0800;
 pub const O_NOCTTY = 0x8000;
@@ -324,7 +339,7 @@ pub const O_NONBLOCK = 0x0004;
 pub const O_DSYNC = 0o10000;
 pub const O_SYNC = 0x0080;
 pub const O_RSYNC = 0o4010000;
-pub const O_DIRECTORY = 0o200000;
+pub const O_DIRECTORY = 0x20000;
 pub const O_NOFOLLOW = 0x0100;
 pub const O_CLOEXEC = 0x00100000;
 
@@ -341,14 +356,21 @@ pub const F_SETFD = 2;
 pub const F_GETFL = 3;
 pub const F_SETFL = 4;
 
-pub const F_SETOWN = 8;
-pub const F_GETOWN = 9;
-pub const F_SETSIG = 10;
-pub const F_GETSIG = 11;
+pub const F_GETOWN = 5;
+pub const F_SETOWN = 6;
 
-pub const F_GETLK = 5;
-pub const F_SETLK = 6;
-pub const F_SETLKW = 7;
+pub const F_GETLK = 11;
+pub const F_SETLK = 12;
+pub const F_SETLKW = 13;
+
+pub const F_RDLCK = 1;
+pub const F_WRLCK = 3;
+pub const F_UNLCK = 2;
+
+pub const LOCK_SH = 1;
+pub const LOCK_EX = 2;
+pub const LOCK_UN = 8;
+pub const LOCK_NB = 4;
 
 pub const F_SETOWN_EX = 15;
 pub const F_GETOWN_EX = 16;
@@ -373,6 +395,47 @@ pub const SOCK_SEQPACKET = 5;
 
 pub const SOCK_CLOEXEC = 0x10000000;
 pub const SOCK_NONBLOCK = 0x20000000;
+
+pub const SO_DEBUG = 0x00000001;
+pub const SO_ACCEPTCONN = 0x00000002;
+pub const SO_REUSEADDR = 0x00000004;
+pub const SO_KEEPALIVE = 0x00000008;
+pub const SO_DONTROUTE = 0x00000010;
+pub const SO_BROADCAST = 0x00000020;
+pub const SO_USELOOPBACK = 0x00000040;
+pub const SO_LINGER = 0x00000080;
+pub const SO_OOBINLINE = 0x00000100;
+pub const SO_REUSEPORT = 0x00000200;
+pub const SO_TIMESTAMP = 0x00000400;
+pub const SO_NOSIGPIPE = 0x00000800;
+pub const SO_ACCEPTFILTER = 0x00001000;
+pub const SO_BINTIME = 0x00002000;
+pub const SO_NO_OFFLOAD = 0x00004000;
+pub const SO_NO_DDP = 0x00008000;
+pub const SO_REUSEPORT_LB = 0x00010000;
+
+pub const SO_SNDBUF = 0x1001;
+pub const SO_RCVBUF = 0x1002;
+pub const SO_SNDLOWAT = 0x1003;
+pub const SO_RCVLOWAT = 0x1004;
+pub const SO_SNDTIMEO = 0x1005;
+pub const SO_RCVTIMEO = 0x1006;
+pub const SO_ERROR = 0x1007;
+pub const SO_TYPE = 0x1008;
+pub const SO_LABEL = 0x1009;
+pub const SO_PEERLABEL = 0x1010;
+pub const SO_LISTENQLIMIT = 0x1011;
+pub const SO_LISTENQLEN = 0x1012;
+pub const SO_LISTENINCQLEN = 0x1013;
+pub const SO_SETFIB = 0x1014;
+pub const SO_USER_COOKIE = 0x1015;
+pub const SO_PROTOCOL = 0x1016;
+pub const SO_PROTOTYPE = SO_PROTOCOL;
+pub const SO_TS_CLOCK = 0x1017;
+pub const SO_MAX_PACING_RATE = 0x1018;
+pub const SO_DOMAIN = 0x1019;
+
+pub const SOL_SOCKET = 0xffff;
 
 pub const PF_UNSPEC = AF_UNSPEC;
 pub const PF_LOCAL = AF_LOCAL;
@@ -411,7 +474,7 @@ pub const PF_SLOW = AF_SLOW;
 pub const PF_SCLUSTER = AF_SCLUSTER;
 pub const PF_ARP = AF_ARP;
 pub const PF_BLUETOOTH = AF_BLUETOOTH;
-pub const PF_IEEE80211 = AF_IEE80211;
+pub const PF_IEEE80211 = AF_IEEE80211;
 pub const PF_INET_SDP = AF_INET_SDP;
 pub const PF_INET6_SDP = AF_INET6_SDP;
 pub const PF_MAX = AF_MAX;
@@ -458,8 +521,8 @@ pub const AF_SCLUSTER = 34;
 pub const AF_ARP = 35;
 pub const AF_BLUETOOTH = 36;
 pub const AF_IEEE80211 = 37;
-pub const AF_INET_SDP = 38;
-pub const AF_INET6_SDP = 39;
+pub const AF_INET_SDP = 40;
+pub const AF_INET6_SDP = 42;
 pub const AF_MAX = 42;
 
 pub const DT_UNKNOWN = 0;
@@ -619,61 +682,31 @@ pub const NOTE_NSECONDS = 0x00000008;
 /// timeout is absolute
 pub const NOTE_ABSTIME = 0x00000010;
 
-pub const TCGETS = 0x5401;
-pub const TCSETS = 0x5402;
-pub const TCSETSW = 0x5403;
-pub const TCSETSF = 0x5404;
-pub const TCGETA = 0x5405;
-pub const TCSETA = 0x5406;
-pub const TCSETAW = 0x5407;
-pub const TCSETAF = 0x5408;
-pub const TCSBRK = 0x5409;
-pub const TCXONC = 0x540A;
-pub const TCFLSH = 0x540B;
-pub const TIOCEXCL = 0x540C;
-pub const TIOCNXCL = 0x540D;
-pub const TIOCSCTTY = 0x540E;
-pub const TIOCGPGRP = 0x540F;
-pub const TIOCSPGRP = 0x5410;
-pub const TIOCOUTQ = 0x5411;
-pub const TIOCSTI = 0x5412;
-pub const TIOCGWINSZ = 0x5413;
-pub const TIOCSWINSZ = 0x5414;
-pub const TIOCMGET = 0x5415;
-pub const TIOCMBIS = 0x5416;
-pub const TIOCMBIC = 0x5417;
-pub const TIOCMSET = 0x5418;
-pub const TIOCGSOFTCAR = 0x5419;
-pub const TIOCSSOFTCAR = 0x541A;
-pub const FIONREAD = 0x541B;
-pub const TIOCINQ = FIONREAD;
-pub const TIOCLINUX = 0x541C;
-pub const TIOCCONS = 0x541D;
-pub const TIOCGSERIAL = 0x541E;
-pub const TIOCSSERIAL = 0x541F;
-pub const TIOCPKT = 0x5420;
-pub const FIONBIO = 0x5421;
-pub const TIOCNOTTY = 0x5422;
-pub const TIOCSETD = 0x5423;
-pub const TIOCGETD = 0x5424;
-pub const TCSBRKP = 0x5425;
-pub const TIOCSBRK = 0x5427;
-pub const TIOCCBRK = 0x5428;
-pub const TIOCGSID = 0x5429;
-pub const TIOCGRS485 = 0x542E;
-pub const TIOCSRS485 = 0x542F;
-pub const TIOCGPTN = 0x80045430;
-pub const TIOCSPTLCK = 0x40045431;
-pub const TIOCGDEV = 0x80045432;
-pub const TCGETX = 0x5432;
-pub const TCSETX = 0x5433;
-pub const TCSETXF = 0x5434;
-pub const TCSETXW = 0x5435;
-pub const TIOCSIG = 0x40045436;
-pub const TIOCVHANGUP = 0x5437;
-pub const TIOCGPKT = 0x80045438;
-pub const TIOCGPTLCK = 0x80045439;
-pub const TIOCGEXCL = 0x80045440;
+pub const TIOCEXCL = 0x2000740d;
+pub const TIOCNXCL = 0x2000740e;
+pub const TIOCSCTTY = 0x20007461;
+pub const TIOCGPGRP = 0x40047477;
+pub const TIOCSPGRP = 0x80047476;
+pub const TIOCOUTQ = 0x40047473;
+pub const TIOCSTI = 0x80017472;
+pub const TIOCGWINSZ = 0x40087468;
+pub const TIOCSWINSZ = 0x80087467;
+pub const TIOCMGET = 0x4004746a;
+pub const TIOCMBIS = 0x8004746c;
+pub const TIOCMBIC = 0x8004746b;
+pub const TIOCMSET = 0x8004746d;
+pub const FIONREAD = 0x4004667f;
+pub const TIOCCONS = 0x80047462;
+pub const TIOCPKT = 0x80047470;
+pub const FIONBIO = 0x8004667e;
+pub const TIOCNOTTY = 0x20007471;
+pub const TIOCSETD = 0x8004741b;
+pub const TIOCGETD = 0x4004741a;
+pub const TIOCSBRK = 0x2000747b;
+pub const TIOCCBRK = 0x2000747a;
+pub const TIOCGSID = 0x40047463;
+pub const TIOCGPTN = 0x4004740f;
+pub const TIOCSIG = 0x2004745f;
 
 pub fn WEXITSTATUS(s: u32) u32 {
     return (s & 0xff00) >> 8;
@@ -703,16 +736,16 @@ pub const winsize = extern struct {
 
 const NSIG = 32;
 
-pub const SIG_ERR = @intToPtr(extern fn (i32) void, maxInt(usize));
-pub const SIG_DFL = @intToPtr(extern fn (i32) void, 0);
-pub const SIG_IGN = @intToPtr(extern fn (i32) void, 1);
+pub const SIG_ERR = @intToPtr(fn (i32) callconv(.C) void, maxInt(usize));
+pub const SIG_DFL = @intToPtr(fn (i32) callconv(.C) void, 0);
+pub const SIG_IGN = @intToPtr(fn (i32) callconv(.C) void, 1);
 
 /// Renamed from `sigaction` to `Sigaction` to avoid conflict with the syscall.
 pub const Sigaction = extern struct {
     /// signal handler
     __sigaction_u: extern union {
-        __sa_handler: extern fn (i32) void,
-        __sa_sigaction: extern fn (i32, *__siginfo, usize) void,
+        __sa_handler: fn (i32) callconv(.C) void,
+        __sa_sigaction: fn (i32, *__siginfo, usize) callconv(.C) void,
     },
 
     /// see signal options
@@ -1319,3 +1352,39 @@ pub const IPPROTO_RESERVED_253 = 253;
 
 /// Reserved
 pub const IPPROTO_RESERVED_254 = 254;
+
+pub const rlimit_resource = extern enum(c_int) {
+    CPU = 0,
+    FSIZE = 1,
+    DATA = 2,
+    STACK = 3,
+    CORE = 4,
+    RSS = 5,
+    MEMLOCK = 6,
+    NPROC = 7,
+    NOFILE = 8,
+    SBSIZE = 9,
+    VMEM = 10,
+    AS = 10,
+    NPTS = 11,
+    SWAP = 12,
+    KQUEUES = 13,
+    UMTXP = 14,
+
+    _,
+};
+
+pub const rlim_t = i64;
+
+/// No limit
+pub const RLIM_INFINITY: rlim_t = (1 << 63) - 1;
+
+pub const RLIM_SAVED_MAX = RLIM_INFINITY;
+pub const RLIM_SAVED_CUR = RLIM_INFINITY;
+
+pub const rlimit = extern struct {
+    /// Soft limit
+    cur: rlim_t,
+    /// Hard limit
+    max: rlim_t,
+};

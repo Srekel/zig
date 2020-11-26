@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const builtin = @import("builtin");
 const std = @import("../../std.zig");
 const maxInt = std.math.maxInt;
@@ -14,17 +19,23 @@ pub usingnamespace switch (builtin.arch) {
     .aarch64 => @import("linux/arm64.zig"),
     .arm => @import("linux/arm-eabi.zig"),
     .riscv64 => @import("linux/riscv64.zig"),
-    .mipsel => @import("linux/mipsel.zig"),
+    .sparcv9 => @import("linux/sparc64.zig"),
+    .mips, .mipsel => @import("linux/mips.zig"),
+    .powerpc64, .powerpc64le => @import("linux/powerpc64.zig"),
     else => struct {},
 };
 
 pub usingnamespace @import("linux/netlink.zig");
+pub usingnamespace @import("linux/prctl.zig");
+pub usingnamespace @import("linux/securebits.zig");
 
 const is_mips = builtin.arch.isMIPS();
+const is_ppc64 = builtin.arch.isPPC64();
+const is_sparc = builtin.arch.isSPARC();
 
 pub const pid_t = i32;
 pub const fd_t = i32;
-pub const uid_t = i32;
+pub const uid_t = u32;
 pub const gid_t = u32;
 pub const clock_t = isize;
 
@@ -73,6 +84,27 @@ pub const AT_STATX_DONT_SYNC = 0x4000;
 /// Apply to the entire subtree
 pub const AT_RECURSIVE = 0x8000;
 
+/// Default is extend size
+pub const FALLOC_FL_KEEP_SIZE = 0x01;
+
+/// De-allocates range
+pub const FALLOC_FL_PUNCH_HOLE = 0x02;
+
+/// Reserved codepoint
+pub const FALLOC_FL_NO_HIDE_STALE = 0x04;
+
+/// Removes a range of a file without leaving a hole in the file
+pub const FALLOC_FL_COLLAPSE_RANGE = 0x08;
+
+/// Converts a range of file to zeros preferably without issuing data IO
+pub const FALLOC_FL_ZERO_RANGE = 0x10;
+
+/// Inserts space within the file size without overwriting any existing data
+pub const FALLOC_FL_INSERT_RANGE = 0x20;
+
+/// Unshares shared blocks within the file size without overwriting any existing data
+pub const FALLOC_FL_UNSHARE_RANGE = 0x40;
+
 pub const FUTEX_WAIT = 0;
 pub const FUTEX_WAKE = 1;
 pub const FUTEX_FD = 2;
@@ -88,11 +120,29 @@ pub const FUTEX_PRIVATE_FLAG = 128;
 
 pub const FUTEX_CLOCK_REALTIME = 256;
 
-pub const PROT_NONE = 0;
-pub const PROT_READ = 1;
-pub const PROT_WRITE = 2;
-pub const PROT_EXEC = 4;
+/// page can not be accessed
+pub const PROT_NONE = 0x0;
+
+/// page can be read
+pub const PROT_READ = 0x1;
+
+/// page can be written
+pub const PROT_WRITE = 0x2;
+
+/// page can be executed
+pub const PROT_EXEC = 0x4;
+
+/// page may be used for atomic ops
+pub const PROT_SEM = switch (builtin.arch) {
+    // TODO: also xtensa
+    .mips, .mipsel, .mips64, .mips64el => 0x10,
+    else => 0x8,
+};
+
+/// mprotect flag: extend change to start of growsdown vma
 pub const PROT_GROWSDOWN = 0x01000000;
+
+/// mprotect flag: extend change to end of growsup vma
 pub const PROT_GROWSUP = 0x02000000;
 
 /// Share changes
@@ -155,27 +205,46 @@ pub usingnamespace if (is_mips)
         pub const SA_NOCLDSTOP = 1;
         pub const SA_NOCLDWAIT = 0x10000;
         pub const SA_SIGINFO = 8;
+        pub const SA_RESTART = 0x10000000;
+        pub const SA_RESETHAND = 0x80000000;
+        pub const SA_ONSTACK = 0x08000000;
+        pub const SA_NODEFER = 0x40000000;
+        pub const SA_RESTORER = 0x04000000;
 
         pub const SIG_BLOCK = 1;
         pub const SIG_UNBLOCK = 2;
         pub const SIG_SETMASK = 3;
+    }
+else if (is_sparc)
+    struct {
+        pub const SA_NOCLDSTOP = 0x8;
+        pub const SA_NOCLDWAIT = 0x100;
+        pub const SA_SIGINFO = 0x200;
+        pub const SA_RESTART = 0x2;
+        pub const SA_RESETHAND = 0x4;
+        pub const SA_ONSTACK = 0x1;
+        pub const SA_NODEFER = 0x20;
+        pub const SA_RESTORER = 0x04000000;
+
+        pub const SIG_BLOCK = 1;
+        pub const SIG_UNBLOCK = 2;
+        pub const SIG_SETMASK = 4;
     }
 else
     struct {
         pub const SA_NOCLDSTOP = 1;
         pub const SA_NOCLDWAIT = 2;
         pub const SA_SIGINFO = 4;
+        pub const SA_RESTART = 0x10000000;
+        pub const SA_RESETHAND = 0x80000000;
+        pub const SA_ONSTACK = 0x08000000;
+        pub const SA_NODEFER = 0x40000000;
+        pub const SA_RESTORER = 0x04000000;
 
         pub const SIG_BLOCK = 0;
         pub const SIG_UNBLOCK = 1;
         pub const SIG_SETMASK = 2;
     };
-
-pub const SA_ONSTACK = 0x08000000;
-pub const SA_RESTART = 0x10000000;
-pub const SA_NODEFER = 0x40000000;
-pub const SA_RESETHAND = 0x80000000;
-pub const SA_RESTORER = 0x04000000;
 
 pub const SIGHUP = 1;
 pub const SIGINT = 2;
@@ -514,8 +583,8 @@ pub const TIOCGPGRP = 0x540F;
 pub const TIOCSPGRP = 0x5410;
 pub const TIOCOUTQ = if (is_mips) 0x7472 else 0x5411;
 pub const TIOCSTI = 0x5412;
-pub const TIOCGWINSZ = if (is_mips) 0x40087468 else 0x5413;
-pub const TIOCSWINSZ = if (is_mips) 0x80087467 else 0x5414;
+pub const TIOCGWINSZ = if (is_mips or is_ppc64) 0x40087468 else 0x5413;
+pub const TIOCSWINSZ = if (is_mips or is_ppc64) 0x80087467 else 0x5414;
 pub const TIOCMGET = 0x5415;
 pub const TIOCMBIS = 0x5416;
 pub const TIOCMBIC = 0x5417;
@@ -616,6 +685,11 @@ pub const CLONE_IO = 0x80000000;
 
 /// Clear any signal handler and reset to SIG_DFL.
 pub const CLONE_CLEAR_SIGHAND = 0x100000000;
+
+// cloning flags intersect with CSIGNAL so can be used with unshare and clone3 syscalls only.
+
+/// New time namespace
+pub const CLONE_NEWTIME = 0x00000080;
 
 pub const EFD_SEMAPHORE = 1;
 pub const EFD_CLOEXEC = O_CLOEXEC;
@@ -746,6 +820,9 @@ pub fn S_ISSOCK(m: u32) bool {
     return m & S_IFMT == S_IFSOCK;
 }
 
+pub const UTIME_NOW = 0x3fffffff;
+pub const UTIME_OMIT = 0x3ffffffe;
+
 pub const TFD_NONBLOCK = O_NONBLOCK;
 pub const TFD_CLOEXEC = O_CLOEXEC;
 
@@ -790,30 +867,57 @@ pub const app_mask: sigset_t = [2]u32{ 0xfffffffc, 0x7fffffff } ++ [_]u32{0xffff
 pub const k_sigaction = if (is_mips)
     extern struct {
         flags: usize,
-        sigaction: ?extern fn (i32, *siginfo_t, *c_void) void,
+        sigaction: ?fn (i32, *siginfo_t, ?*c_void) callconv(.C) void,
         mask: [4]u32,
-        restorer: extern fn () void,
+        restorer: fn () callconv(.C) void,
     }
 else
     extern struct {
-        sigaction: ?extern fn (i32, *siginfo_t, *c_void) void,
+        sigaction: ?fn (i32, *siginfo_t, ?*c_void) callconv(.C) void,
         flags: usize,
-        restorer: extern fn () void,
+        restorer: fn () callconv(.C) void,
         mask: [2]u32,
     };
 
 /// Renamed from `sigaction` to `Sigaction` to avoid conflict with the syscall.
 pub const Sigaction = extern struct {
-    sigaction: ?extern fn (i32, *siginfo_t, *c_void) void,
+    pub const sigaction_fn = fn (i32, *siginfo_t, ?*c_void) callconv(.C) void;
+    sigaction: ?sigaction_fn,
     mask: sigset_t,
     flags: u32,
-    restorer: ?extern fn () void = null,
+    restorer: ?fn () callconv(.C) void = null,
 };
 
-pub const SIG_ERR = @intToPtr(extern fn (i32, *siginfo_t, *c_void) void, maxInt(usize));
-pub const SIG_DFL = @intToPtr(?extern fn (i32, *siginfo_t, *c_void) void, 0);
-pub const SIG_IGN = @intToPtr(extern fn (i32, *siginfo_t, *c_void) void, 1);
-pub const empty_sigset = [_]u32{0} ** sigset_t.len;
+pub const SIG_ERR = @intToPtr(?Sigaction.sigaction_fn, maxInt(usize));
+pub const SIG_DFL = @intToPtr(?Sigaction.sigaction_fn, 0);
+pub const SIG_IGN = @intToPtr(?Sigaction.sigaction_fn, 1);
+
+pub const empty_sigset = [_]u32{0} ** @typeInfo(sigset_t).Array.len;
+
+pub const signalfd_siginfo = extern struct {
+    signo: u32,
+    errno: i32,
+    code: i32,
+    pid: u32,
+    uid: uid_t,
+    fd: i32,
+    tid: u32,
+    band: u32,
+    overrun: u32,
+    trapno: u32,
+    status: i32,
+    int: i32,
+    ptr: u64,
+    utime: u64,
+    stime: u64,
+    addr: u64,
+    addr_lsb: u16,
+    __pad2: u16,
+    syscall: i32,
+    call_addr: u64,
+    arch: u32,
+    __pad: [28]u8,
+};
 
 pub const in_port_t = u16;
 pub const sa_family_t = u16;
@@ -1012,7 +1116,7 @@ pub const dl_phdr_info = extern struct {
 
 pub const CPU_SETSIZE = 128;
 pub const cpu_set_t = [CPU_SETSIZE / @sizeOf(usize)]usize;
-pub const cpu_count_t = std.meta.IntType(false, std.math.log2(CPU_SETSIZE * 8));
+pub const cpu_count_t = std.meta.Int(.unsigned, std.math.log2(CPU_SETSIZE * 8));
 
 pub fn CPU_COUNT(set: cpu_set_t) cpu_count_t {
     var sum: cpu_count_t = 0;
@@ -1048,11 +1152,19 @@ pub const SS_ONSTACK = 1;
 pub const SS_DISABLE = 2;
 pub const SS_AUTODISARM = 1 << 31;
 
-pub const stack_t = extern struct {
-    ss_sp: [*]u8,
-    ss_flags: i32,
-    ss_size: isize,
-};
+pub const stack_t = if (is_mips)
+    // IRIX compatible stack_t
+    extern struct {
+        ss_sp: [*]u8,
+        ss_size: usize,
+        ss_flags: i32,
+    }
+else
+    extern struct {
+        ss_sp: [*]u8,
+        ss_flags: i32,
+        ss_size: usize,
+    };
 
 pub const sigval = extern union {
     int: i32,
@@ -1125,7 +1237,8 @@ pub const io_uring_params = extern struct {
     sq_thread_cpu: u32,
     sq_thread_idle: u32,
     features: u32,
-    resv: [4]u32,
+    wq_fd: u32,
+    resv: [3]u32,
     sq_off: io_sqring_offsets,
     cq_off: io_cqring_offsets,
 };
@@ -1135,6 +1248,10 @@ pub const io_uring_params = extern struct {
 pub const IORING_FEAT_SINGLE_MMAP = 1 << 0;
 pub const IORING_FEAT_NODROP = 1 << 1;
 pub const IORING_FEAT_SUBMIT_STABLE = 1 << 2;
+pub const IORING_FEAT_RW_CUR_POS = 1 << 3;
+pub const IORING_FEAT_CUR_PERSONALITY = 1 << 4;
+pub const IORING_FEAT_FAST_POLL = 1 << 5;
+pub const IORING_FEAT_POLL_32BITS = 1 << 6;
 
 // io_uring_params.flags
 
@@ -1149,6 +1266,12 @@ pub const IORING_SETUP_SQ_AFF = 1 << 2;
 
 /// app defines CQ size
 pub const IORING_SETUP_CQSIZE = 1 << 3;
+
+/// clamp SQ/CQ ring sizes
+pub const IORING_SETUP_CLAMP = 1 << 4;
+
+/// attach to existing wq
+pub const IORING_SETUP_ATTACH_WQ = 1 << 5;
 
 pub const io_sqring_offsets = extern struct {
     /// offset of ring head
@@ -1181,6 +1304,9 @@ pub const io_sqring_offsets = extern struct {
 /// needs io_uring_enter wakeup
 pub const IORING_SQ_NEED_WAKEUP = 1 << 0;
 
+/// kernel has cqes waiting beyond the cq ring
+pub const IORING_SQ_CQ_OVERFLOW = 1 << 1;
+
 pub const io_cqring_offsets = extern struct {
     head: u32,
     tail: u32,
@@ -1192,51 +1318,53 @@ pub const io_cqring_offsets = extern struct {
 };
 
 pub const io_uring_sqe = extern struct {
-    opcode: u8,
+    opcode: IORING_OP,
     flags: u8,
     ioprio: u16,
     fd: i32,
-    pub const union1 = extern union {
-        off: u64,
-        addr2: u64,
-    };
-    union1: union1,
+    off: u64,
     addr: u64,
     len: u32,
-    pub const union2 = extern union {
-        rw_flags: kernel_rwf,
-        fsync_flags: u32,
-        poll_events: u16,
-        sync_range_flags: u32,
-        msg_flags: u32,
-        timeout_flags: u32,
-        accept_flags: u32,
-        cancel_flags: u32,
-    };
-    union2: union2,
+    rw_flags: u32,
     user_data: u64,
-    pub const union3 = extern union {
-        buf_index: u16,
-        __pad2: [3]u64,
-    };
-    union3: union3,
+    buf_index: u16,
+    personality: u16,
+    splice_fd_in: i32,
+    __pad2: [2]u64,
+};
+
+pub const IOSQE_BIT = extern enum(u8) {
+    FIXED_FILE,
+    IO_DRAIN,
+    IO_LINK,
+    IO_HARDLINK,
+    ASYNC,
+    BUFFER_SELECT,
+
+    _,
 };
 
 // io_uring_sqe.flags
 
 /// use fixed fileset
-pub const IOSQE_FIXED_FILE = 1 << 0;
+pub const IOSQE_FIXED_FILE = 1 << @enumToInt(IOSQE_BIT.FIXED_FILE);
 
 /// issue after inflight IO
-pub const IOSQE_IO_DRAIN = 1 << 1;
+pub const IOSQE_IO_DRAIN = 1 << @enumToInt(IOSQE_BIT.IO_DRAIN);
 
 /// links next sqe
-pub const IOSQE_IO_LINK = 1 << 2;
+pub const IOSQE_IO_LINK = 1 << @enumToInt(IOSQE_BIT.IO_LINK);
 
 /// like LINK, but stronger
-pub const IOSQE_IO_HARDLINK = 1 << 3;
+pub const IOSQE_IO_HARDLINK = 1 << @enumToInt(IOSQE_BIT.IO_HARDLINK);
 
-pub const IORING_OP = extern enum {
+/// always go async
+pub const IOSQE_ASYNC = 1 << @enumToInt(IOSQE_BIT.ASYNC);
+
+/// select buffer from buf_group
+pub const IOSQE_BUFFER_SELECT = 1 << @enumToInt(IOSQE_BIT.BUFFER_SELECT);
+
+pub const IORING_OP = extern enum(u8) {
     NOP,
     READV,
     WRITEV,
@@ -1254,6 +1382,23 @@ pub const IORING_OP = extern enum {
     ASYNC_CANCEL,
     LINK_TIMEOUT,
     CONNECT,
+    FALLOCATE,
+    OPENAT,
+    CLOSE,
+    FILES_UPDATE,
+    STATX,
+    READ,
+    WRITE,
+    FADVISE,
+    MADVISE,
+    SEND,
+    RECV,
+    OPENAT2,
+    EPOLL_CTL,
+    SPLICE,
+    PROVIDE_BUFFERS,
+    REMOVE_BUFFERS,
+    TEE,
 
     _,
 };
@@ -1283,18 +1428,52 @@ pub const IORING_ENTER_GETEVENTS = 1 << 0;
 pub const IORING_ENTER_SQ_WAKEUP = 1 << 1;
 
 // io_uring_register opcodes and arguments
-pub const IORING_REGISTER_BUFFERS = 0;
-pub const IORING_UNREGISTER_BUFFERS = 1;
-pub const IORING_REGISTER_FILES = 2;
-pub const IORING_UNREGISTER_FILES = 3;
-pub const IORING_REGISTER_EVENTFD = 4;
-pub const IORING_UNREGISTER_EVENTFD = 5;
-pub const IORING_REGISTER_FILES_UPDATE = 6;
+pub const IORING_REGISTER = extern enum(u32) {
+    REGISTER_BUFFERS,
+    UNREGISTER_BUFFERS,
+    REGISTER_FILES,
+    UNREGISTER_FILES,
+    REGISTER_EVENTFD,
+    UNREGISTER_EVENTFD,
+    REGISTER_FILES_UPDATE,
+    REGISTER_EVENTFD_ASYNC,
+    REGISTER_PROBE,
+    REGISTER_PERSONALITY,
+    UNREGISTER_PERSONALITY,
+
+    _,
+};
 
 pub const io_uring_files_update = struct {
     offset: u32,
     resv: u32,
     fds: u64,
+};
+
+pub const IO_URING_OP_SUPPORTED = 1 << 0;
+
+pub const io_uring_probe_op = struct {
+    op: IORING_OP,
+
+    resv: u8,
+
+    /// IO_URING_OP_* flags
+    flags: u16,
+
+    resv2: u32,
+};
+
+pub const io_uring_probe = struct {
+    /// last opcode supported
+    last_op: IORING_OP,
+
+    /// Number of io_uring_probe_op following
+    ops_len: u8,
+
+    resv: u16,
+    resv2: u32[3],
+
+    // Followed by up to `ops_len` io_uring_probe_op structures
 };
 
 pub const utsname = extern struct {
@@ -1350,10 +1529,10 @@ pub const Statx = extern struct {
     nlink: u32,
 
     /// User ID of owner
-    uid: u32,
+    uid: uid_t,
 
     /// Group ID of owner
-    gid: u32,
+    gid: gid_t,
 
     /// File type and mode
     mode: u16,
@@ -1449,6 +1628,123 @@ pub const RR_A = 1;
 pub const RR_CNAME = 5;
 pub const RR_AAAA = 28;
 
+/// Turn off Nagle's algorithm
+pub const TCP_NODELAY = 1;
+/// Limit MSS
+pub const TCP_MAXSEG = 2;
+/// Never send partially complete segments.
+pub const TCP_CORK = 3;
+/// Start keeplives after this period, in seconds
+pub const TCP_KEEPIDLE = 4;
+/// Interval between keepalives
+pub const TCP_KEEPINTVL = 5;
+/// Number of keepalives before death
+pub const TCP_KEEPCNT = 6;
+/// Number of SYN retransmits
+pub const TCP_SYNCNT = 7;
+/// Life time of orphaned FIN-WAIT-2 state
+pub const TCP_LINGER2 = 8;
+/// Wake up listener only when data arrive
+pub const TCP_DEFER_ACCEPT = 9;
+/// Bound advertised window
+pub const TCP_WINDOW_CLAMP = 10;
+/// Information about this connection.
+pub const TCP_INFO = 11;
+/// Block/reenable quick acks
+pub const TCP_QUICKACK = 12;
+/// Congestion control algorithm
+pub const TCP_CONGESTION = 13;
+/// TCP MD5 Signature (RFC2385)
+pub const TCP_MD5SIG = 14;
+/// Use linear timeouts for thin streams
+pub const TCP_THIN_LINEAR_TIMEOUTS = 16;
+/// Fast retrans. after 1 dupack
+pub const TCP_THIN_DUPACK = 17;
+/// How long for loss retry before timeout
+pub const TCP_USER_TIMEOUT = 18;
+/// TCP sock is under repair right now
+pub const TCP_REPAIR = 19;
+pub const TCP_REPAIR_QUEUE = 20;
+pub const TCP_QUEUE_SEQ = 21;
+pub const TCP_REPAIR_OPTIONS = 22;
+/// Enable FastOpen on listeners
+pub const TCP_FASTOPEN = 23;
+pub const TCP_TIMESTAMP = 24;
+/// limit number of unsent bytes in write queue
+pub const TCP_NOTSENT_LOWAT = 25;
+/// Get Congestion Control (optional) info
+pub const TCP_CC_INFO = 26;
+/// Record SYN headers for new connections
+pub const TCP_SAVE_SYN = 27;
+/// Get SYN headers recorded for connection
+pub const TCP_SAVED_SYN = 28;
+/// Get/set window parameters
+pub const TCP_REPAIR_WINDOW = 29;
+/// Attempt FastOpen with connect
+pub const TCP_FASTOPEN_CONNECT = 30;
+/// Attach a ULP to a TCP connection
+pub const TCP_ULP = 31;
+/// TCP MD5 Signature with extensions
+pub const TCP_MD5SIG_EXT = 32;
+/// Set the key for Fast Open (cookie)
+pub const TCP_FASTOPEN_KEY = 33;
+/// Enable TFO without a TFO cookie
+pub const TCP_FASTOPEN_NO_COOKIE = 34;
+pub const TCP_ZEROCOPY_RECEIVE = 35;
+/// Notify bytes available to read as a cmsg on read
+pub const TCP_INQ = 36;
+pub const TCP_CM_INQ = TCP_INQ;
+/// delay outgoing packets by XX usec
+pub const TCP_TX_DELAY = 37;
+
+pub const TCP_REPAIR_ON = 1;
+pub const TCP_REPAIR_OFF = 0;
+/// Turn off without window probes
+pub const TCP_REPAIR_OFF_NO_WP = -1;
+
+pub const tcp_repair_opt = extern struct {
+    opt_code: u32,
+    opt_val: u32,
+};
+
+pub const tcp_repair_window = extern struct {
+    snd_wl1: u32,
+    snd_wnd: u32,
+    max_window: u32,
+    rcv_wnd: u32,
+    rcv_wup: u32,
+};
+
+pub const TcpRepairOption = extern enum {
+    TCP_NO_QUEUE,
+    TCP_RECV_QUEUE,
+    TCP_SEND_QUEUE,
+    TCP_QUEUES_NR,
+};
+
+/// why fastopen failed from client perspective
+pub const tcp_fastopen_client_fail = extern enum {
+    /// catch-all
+    TFO_STATUS_UNSPEC,
+    /// if not in TFO_CLIENT_NO_COOKIE mode
+    TFO_COOKIE_UNAVAILABLE,
+    /// SYN-ACK did not ack SYN data
+    TFO_DATA_NOT_ACKED,
+    /// SYN-ACK did not ack SYN data after timeout
+    TFO_SYN_RETRANSMITTED,
+};
+
+/// for TCP_INFO socket option
+pub const TCPI_OPT_TIMESTAMPS = 1;
+pub const TCPI_OPT_SACK = 2;
+pub const TCPI_OPT_WSCALE = 4;
+/// ECN was negociated at TCP session init
+pub const TCPI_OPT_ECN = 8;
+/// we received at least one packet with ECT
+pub const TCPI_OPT_ECN_SEEN = 16;
+/// SYN-ACK acked data in SYN sent or rcvd
+pub const TCPI_OPT_SYN_DATA = 32;
+
 pub const nfds_t = usize;
 pub const pollfd = extern struct {
     fd: fd_t,
@@ -1508,7 +1804,7 @@ pub const rusage = extern struct {
     utime: timeval,
     stime: timeval,
     maxrss: isize,
-    ix_rss: isize,
+    ixrss: isize,
     idrss: isize,
     isrss: isize,
     minflt: isize,
@@ -1596,4 +1892,112 @@ pub const termios = extern struct {
     cc: [NCCS]cc_t,
     ispeed: speed_t,
     ospeed: speed_t,
+};
+
+pub const SIOCGIFINDEX = 0x8933;
+pub const IFNAMESIZE = 16;
+
+pub const ifmap = extern struct {
+    mem_start: u32,
+    mem_end: u32,
+    base_addr: u16,
+    irq: u8,
+    dma: u8,
+    port: u8,
+};
+
+pub const ifreq = extern struct {
+    ifrn: extern union {
+        name: [IFNAMESIZE]u8,
+    },
+    ifru: extern union {
+        addr: sockaddr,
+        dstaddr: sockaddr,
+        broadaddr: sockaddr,
+        netmask: sockaddr,
+        hwaddr: sockaddr,
+        flags: i16,
+        ivalue: i32,
+        mtu: i32,
+        map: ifmap,
+        slave: [IFNAMESIZE - 1:0]u8,
+        newname: [IFNAMESIZE - 1:0]u8,
+        data: ?[*]u8,
+    },
+};
+
+// doc comments copied from musl
+pub const rlimit_resource = extern enum(c_int) {
+    /// Per-process CPU limit, in seconds.
+    CPU,
+
+    /// Largest file that can be created, in bytes.
+    FSIZE,
+
+    /// Maximum size of data segment, in bytes.
+    DATA,
+
+    /// Maximum size of stack segment, in bytes.
+    STACK,
+
+    /// Largest core file that can be created, in bytes.
+    CORE,
+
+    /// Largest resident set size, in bytes.
+    /// This affects swapping; processes that are exceeding their
+    /// resident set size will be more likely to have physical memory
+    /// taken from them.
+    RSS,
+
+    /// Number of processes.
+    NPROC,
+
+    /// Number of open files.
+    NOFILE,
+
+    /// Locked-in-memory address space.
+    MEMLOCK,
+
+    /// Address space limit.
+    AS,
+
+    /// Maximum number of file locks.
+    LOCKS,
+
+    /// Maximum number of pending signals.
+    SIGPENDING,
+
+    /// Maximum bytes in POSIX message queues.
+    MSGQUEUE,
+
+    /// Maximum nice priority allowed to raise to.
+    /// Nice levels 19 .. -20 correspond to 0 .. 39
+    /// values of this resource limit.
+    NICE,
+
+    /// Maximum realtime priority allowed for non-priviledged
+    /// processes.
+    RTPRIO,
+
+    /// Maximum CPU time in µs that a process scheduled under a real-time
+    /// scheduling policy may consume without making a blocking system
+    /// call before being forcibly descheduled.
+    RTTIME,
+
+    _,
+};
+
+pub const rlim_t = u64;
+
+/// No limit
+pub const RLIM_INFINITY = ~@as(rlim_t, 0);
+
+pub const RLIM_SAVED_MAX = RLIM_INFINITY;
+pub const RLIM_SAVED_CUR = RLIM_INFINITY;
+
+pub const rlimit = extern struct {
+    /// Soft limit
+    cur: rlim_t,
+    /// Hard limit
+    max: rlim_t,
 };

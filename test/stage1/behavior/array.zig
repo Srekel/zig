@@ -31,14 +31,23 @@ fn getArrayLen(a: []const u32) usize {
 test "array with sentinels" {
     const S = struct {
         fn doTheTest(is_ct: bool) void {
-            var zero_sized: [0:0xde]u8 = [_:0xde]u8{};
-            expectEqual(@as(u8, 0xde), zero_sized[0]);
-            // Disabled at runtime because of
-            // https://github.com/ziglang/zig/issues/4372
             if (is_ct) {
+                var zero_sized: [0:0xde]u8 = [_:0xde]u8{};
+                // Disabled at runtime because of
+                // https://github.com/ziglang/zig/issues/4372
+                expectEqual(@as(u8, 0xde), zero_sized[0]);
                 var reinterpreted = @ptrCast(*[1]u8, &zero_sized);
                 expectEqual(@as(u8, 0xde), reinterpreted[0]);
             }
+            var arr: [3:0x55]u8 = undefined;
+            // Make sure the sentinel pointer is pointing after the last element
+            if (!is_ct) {
+                const sentinel_ptr = @ptrToInt(&arr[3]);
+                const last_elem_ptr = @ptrToInt(&arr[2]);
+                expectEqual(@as(usize, 1), sentinel_ptr - last_elem_ptr);
+            }
+            // Make sure the sentinel is writeable
+            arr[3] = 0x55;
         }
     };
 
@@ -125,16 +134,6 @@ test "array literal with specified size" {
     };
     expect(array[0] == 1);
     expect(array[1] == 2);
-}
-
-test "array child property" {
-    var x: [5]i32 = undefined;
-    expect(@TypeOf(x).Child == i32);
-}
-
-test "array len property" {
-    var x: [5]i32 = undefined;
-    expect(@TypeOf(x).len == 5);
 }
 
 test "array len field" {
@@ -372,7 +371,7 @@ test "access the null element of a null terminated array" {
     const S = struct {
         fn doTheTest() void {
             var array: [4:0]u8 = .{ 'a', 'o', 'e', 'u' };
-            comptime expect(array[4] == 0);
+            expect(array[4] == 0);
             var len: usize = 4;
             expect(array[len] == 0);
         }
@@ -413,4 +412,22 @@ test "sentinel element count towards the ABI size calculation" {
 
     S.doTheTest();
     comptime S.doTheTest();
+}
+
+test "zero-sized array with recursive type definition" {
+    const U = struct {
+        fn foo(comptime T: type, comptime n: usize) type {
+            return struct {
+                s: [n]T,
+                x: usize = n,
+            };
+        }
+    };
+
+    const S = struct {
+        list: U.foo(@This(), 0),
+    };
+
+    var t: S = .{ .list = .{ .s = undefined } };
+    expectEqual(@as(usize, 0), t.list.x);
 }

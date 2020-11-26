@@ -218,9 +218,9 @@ test "slice syntax resulting in pointer-to-array" {
         }
 
         fn testPointer0() void {
-            var pointer: [*]u0 = &[1]u0{0};
+            var pointer: [*]const u0 = &[1]u0{0};
             var slice = pointer[0..1];
-            comptime expect(@TypeOf(slice) == *[1]u0);
+            comptime expect(@TypeOf(slice) == *const [1]u0);
             expect(slice[0] == 0);
         }
 
@@ -279,6 +279,11 @@ test "slice syntax resulting in pointer-to-array" {
             comptime expect(@TypeOf(slice) == *align(4) [1]u8);
             expect(slice[0] == 5);
             comptime expect(@TypeOf(src_slice[0..2]) == *align(4) [2]u8);
+        }
+
+        fn testConcatStrLiterals() void {
+            expectEqualSlices("a"[0..] ++ "b"[0..], "ab");
+            expectEqualSlices("a"[0..:0] ++ "b"[0..:0], "ab");
         }
     };
 

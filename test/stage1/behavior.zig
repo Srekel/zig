@@ -1,9 +1,13 @@
+const builtin = @import("builtin");
+
 comptime {
     _ = @import("behavior/align.zig");
     _ = @import("behavior/alignof.zig");
     _ = @import("behavior/array.zig");
-    _ = @import("behavior/asm.zig");
-    _ = @import("behavior/async_fn.zig");
+    if (builtin.os.tag != .wasi) {
+        _ = @import("behavior/asm.zig");
+        _ = @import("behavior/async_fn.zig");
+    }
     _ = @import("behavior/atomics.zig");
     _ = @import("behavior/await_struct.zig");
     _ = @import("behavior/bit_shifting.zig");
@@ -40,7 +44,22 @@ comptime {
     _ = @import("behavior/bugs/3384.zig");
     _ = @import("behavior/bugs/3586.zig");
     _ = @import("behavior/bugs/3742.zig");
+    _ = @import("behavior/bugs/4328.zig");
     _ = @import("behavior/bugs/4560.zig");
+    _ = @import("behavior/bugs/4769_a.zig");
+    _ = @import("behavior/bugs/4769_b.zig");
+    _ = @import("behavior/bugs/4769_c.zig");
+    _ = @import("behavior/bugs/4954.zig");
+    _ = @import("behavior/bugs/5398.zig");
+    _ = @import("behavior/bugs/5413.zig");
+    _ = @import("behavior/bugs/5474.zig");
+    _ = @import("behavior/bugs/5487.zig");
+    _ = @import("behavior/bugs/6456.zig");
+    _ = @import("behavior/bugs/6781.zig");
+    _ = @import("behavior/bugs/6850.zig");
+    _ = @import("behavior/bugs/7027.zig");
+    _ = @import("behavior/bugs/7047.zig");
+    _ = @import("behavior/bugs/7003.zig");
     _ = @import("behavior/bugs/394.zig");
     _ = @import("behavior/bugs/421.zig");
     _ = @import("behavior/bugs/529.zig");
@@ -93,6 +112,7 @@ comptime {
     _ = @import("behavior/shuffle.zig");
     _ = @import("behavior/sizeof_and_typeof.zig");
     _ = @import("behavior/slice.zig");
+    _ = @import("behavior/slice_sentinel_comptime.zig");
     _ = @import("behavior/struct.zig");
     _ = @import("behavior/struct_contains_null_ptr_itself.zig");
     _ = @import("behavior/struct_contains_slice_of_itself.zig");
@@ -114,6 +134,11 @@ comptime {
     _ = @import("behavior/var_args.zig");
     _ = @import("behavior/vector.zig");
     _ = @import("behavior/void.zig");
+    if (builtin.arch == .wasm32) {
+        _ = @import("behavior/wasm.zig");
+    }
     _ = @import("behavior/while.zig");
     _ = @import("behavior/widening.zig");
+    _ = @import("behavior/src.zig");
+    _ = @import("behavior/translate_c_macros.zig");
 }

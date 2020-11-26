@@ -1,13 +1,25 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 const std = @import("../../std.zig");
 const maxInt = std.math.maxInt;
 
 pub fn S_ISCHR(m: u32) bool {
     return m & S_IFMT == S_IFCHR;
 }
+
+// See:
+// - https://gitweb.dragonflybsd.org/dragonfly.git/blob/HEAD:/include/unistd.h
+// - https://gitweb.dragonflybsd.org/dragonfly.git/blob/HEAD:/sys/sys/types.h
+// TODO: mode_t should probably be changed to a u16, audit pid_t/off_t as well
 pub const fd_t = c_int;
 pub const pid_t = c_int;
 pub const off_t = c_long;
 pub const mode_t = c_uint;
+pub const uid_t = u32;
+pub const gid_t = u32;
 
 pub const ENOTSUP = EOPNOTSUPP;
 pub const EWOULDBLOCK = EAGAIN;
@@ -140,14 +152,14 @@ pub const PATH_MAX = 1024;
 
 pub const ino_t = c_ulong;
 
-pub const Stat = extern struct {
+pub const libc_stat = extern struct {
     ino: ino_t,
     nlink: c_uint,
     dev: c_uint,
     mode: c_ushort,
     padding1: u16,
-    uid: c_uint,
-    gid: c_uint,
+    uid: uid_t,
+    gid: gid_t,
     rdev: c_uint,
     atim: timespec,
     mtim: timespec,
@@ -160,15 +172,15 @@ pub const Stat = extern struct {
     lspare: i32,
     qspare1: i64,
     qspare2: i64,
-    pub fn atime(self: Stat) timespec {
+    pub fn atime(self: @This()) timespec {
         return self.atim;
     }
 
-    pub fn mtime(self: Stat) timespec {
+    pub fn mtime(self: @This()) timespec {
         return self.mtim;
     }
 
-    pub fn ctime(self: Stat) timespec {
+    pub fn ctime(self: @This()) timespec {
         return self.ctim;
     }
 };
@@ -244,6 +256,12 @@ pub const KERN_MAXID = 37;
 
 pub const HOST_NAME_MAX = 255;
 
+// access function
+pub const F_OK = 0; // test for existence of file
+pub const X_OK = 1; // test for execute or search permission
+pub const W_OK = 2; // test for write permission
+pub const R_OK = 4; // test for read permission
+
 pub const O_RDONLY = 0;
 pub const O_NDELAY = O_NONBLOCK;
 pub const O_WRONLY = 1;
@@ -277,7 +295,6 @@ pub const SEEK_END = 2;
 pub const SEEK_DATA = 3;
 pub const SEEK_HOLE = 4;
 
-pub const F_OK = 0;
 pub const F_ULOCK = 0;
 pub const F_LOCK = 1;
 pub const F_TLOCK = 2;
@@ -453,9 +470,9 @@ pub const S_IFSOCK = 49152;
 pub const S_IFWHT = 57344;
 pub const S_IFMT = 61440;
 
-pub const SIG_ERR = @intToPtr(extern fn (i32) void, maxInt(usize));
-pub const SIG_DFL = @intToPtr(extern fn (i32) void, 0);
-pub const SIG_IGN = @intToPtr(extern fn (i32) void, 1);
+pub const SIG_ERR = @intToPtr(fn (i32) callconv(.C) void, maxInt(usize));
+pub const SIG_DFL = @intToPtr(fn (i32) callconv(.C) void, 0);
+pub const SIG_IGN = @intToPtr(fn (i32) callconv(.C) void, 1);
 pub const BADSIG = SIG_ERR;
 pub const SIG_BLOCK = 1;
 pub const SIG_UNBLOCK = 2;
@@ -501,7 +518,7 @@ pub const siginfo_t = extern struct {
     si_errno: c_int,
     si_code: c_int,
     si_pid: c_int,
-    si_uid: c_uint,
+    si_uid: uid_t,
     si_status: c_int,
     si_addr: ?*c_void,
     si_value: union_sigval,
@@ -514,13 +531,13 @@ pub const sigset_t = extern struct {
 pub const sig_atomic_t = c_int;
 pub const Sigaction = extern struct {
     __sigaction_u: extern union {
-        __sa_handler: ?extern fn (c_int) void,
-        __sa_sigaction: ?extern fn (c_int, [*c]siginfo_t, ?*c_void) void,
+        __sa_handler: ?fn (c_int) callconv(.C) void,
+        __sa_sigaction: ?fn (c_int, [*c]siginfo_t, ?*c_void) callconv(.C) void,
     },
     sa_flags: c_int,
     sa_mask: sigset_t,
 };
-pub const sig_t = [*c]extern fn (c_int) void;
+pub const sig_t = [*c]fn (c_int) callconv(.C) void;
 
 pub const sigvec = extern struct {
     sv_handler: [*c]__sighandler_t,
@@ -692,10 +709,48 @@ pub const F_DUP2FD = 10;
 pub const F_DUPFD_CLOEXEC = 17;
 pub const F_DUP2FD_CLOEXEC = 18;
 
+pub const LOCK_SH = 1;
+pub const LOCK_EX = 2;
+pub const LOCK_UN = 8;
+pub const LOCK_NB = 4;
+
 pub const Flock = extern struct {
     l_start: off_t,
     l_len: off_t,
     l_pid: pid_t,
     l_type: c_short,
     l_whence: c_short,
+};
+
+pub const rlimit_resource = extern enum(c_int) {
+    CPU = 0,
+    FSIZE = 1,
+    DATA = 2,
+    STACK = 3,
+    CORE = 4,
+    RSS = 5,
+    MEMLOCK = 6,
+    NPROC = 7,
+    NOFILE = 8,
+    SBSIZE = 9,
+    AS = 10,
+    VMEM = 10,
+    POSIXLOCKS = 11,
+
+    _,
+};
+
+pub const rlim_t = i64;
+
+/// No limit
+pub const RLIM_INFINITY: rlim_t = (1 << 63) - 1;
+
+pub const RLIM_SAVED_MAX = RLIM_INFINITY;
+pub const RLIM_SAVED_CUR = RLIM_INFINITY;
+
+pub const rlimit = extern struct {
+    /// Soft limit
+    cur: rlim_t,
+    /// Hard limit
+    max: rlim_t,
 };

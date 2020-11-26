@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2015-2020 Zig Contributors
+// This file is part of [zig](https://ziglang.org/), which is MIT licensed.
+// The MIT license requires this copyright notice to be included in all copies
+// and substantial portions of the software.
 // RFC 8529 conformance tests.
 //
 // Tests are taken from https://github.com/nst/JSONTestSuite
@@ -1751,11 +1756,9 @@ test "i_number_double_huge_neg_exp" {
 }
 
 test "i_number_huge_exp" {
-    return error.SkipZigTest;
-    // FIXME Integer overflow in parseFloat
-    //     any(
-    //         \\[0.4e00669999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999969999999006]
-    //     );
+    any(
+        \\[0.4e00669999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999969999999006]
+    );
 }
 
 test "i_number_neg_int_huge_exp" {
