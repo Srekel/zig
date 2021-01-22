@@ -60,6 +60,7 @@ comptime {
     _ = @import("behavior/bugs/7027.zig");
     _ = @import("behavior/bugs/7047.zig");
     _ = @import("behavior/bugs/7003.zig");
+    _ = @import("behavior/bugs/7250.zig");
     _ = @import("behavior/bugs/394.zig");
     _ = @import("behavior/bugs/421.zig");
     _ = @import("behavior/bugs/529.zig");
@@ -140,5 +141,5 @@ comptime {
     _ = @import("behavior/while.zig");
     _ = @import("behavior/widening.zig");
     _ = @import("behavior/src.zig");
-    _ = @import("behavior/translate_c_macros.zig");
+    // _ = @import("behavior/translate_c_macros.zig");
 }
